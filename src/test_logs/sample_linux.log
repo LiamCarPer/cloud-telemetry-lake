@@ -1,0 +1,2 @@
+May 19 22:15:30 ot-gateway sshd[12345]: Failed password for invalid user admin from 192.168.1.50 port 54321 ssh2
+May 19 22:16:00 ot-gateway systemd[1]: Started System Logging Service.

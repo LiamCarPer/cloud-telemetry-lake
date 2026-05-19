@@ -1,0 +1,12 @@
+.venv/
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.zip
+__pycache__/
+*.pyc
+*.parquet
+tmp_downloads/
+
+# Lambda bundled dependencies
+src/parser_lambda/python/

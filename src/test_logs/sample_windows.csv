@@ -1,0 +1,3 @@
+TimeCreated,Id,LevelDisplayName,ProviderName,Message
+05/19/2026 10:15:00 PM,4625,Information,Microsoft-Windows-Security-Auditing,An account failed to log on.
+05/19/2026 10:16:00 PM,7036,Information,Service Control Manager,The WinHTTP Web Proxy Auto-Discovery Service service entered the running state.
