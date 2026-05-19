@@ -77,6 +77,23 @@ resource "aws_iam_policy" "lambda_policy" {
           aws_s3_bucket.telemetry_buckets["dlq"].arn,
           "${aws_s3_bucket.telemetry_buckets["dlq"].arn}/*"
         ]
+      },
+      # DynamoDB Detections & State (Write/Read)
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:PutItem",
+          "dynamodb:GetItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:Query",
+          "dynamodb:Scan"
+        ]
+        Resource = [
+          aws_dynamodb_table.ot_detections.arn,
+          "${aws_dynamodb_table.ot_detections.arn}/index/*",
+          aws_dynamodb_table.ot_detection_state.arn
+        ]
       }
     ]
   })
