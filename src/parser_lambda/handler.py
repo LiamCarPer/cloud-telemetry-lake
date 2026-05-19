@@ -13,6 +13,9 @@ import pandas as pd
 import awswrangler as wr
 
 from log_parser_toolkit.parsers import get_parser
+from log_parser_toolkit.api import parse_stream
+from log_parser_toolkit.analyzer.state_store import DynamoDBStateStore
+from log_parser_toolkit.analyzer.middleware import StatefulSecurityAnalyzer
 
 # Set up logging
 logger = logging.getLogger()
@@ -38,9 +41,16 @@ if endpoint_url:
         region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
     )
     s3_client = boto3.client("s3", endpoint_url=endpoint_url, aws_access_key_id="mock", aws_secret_access_key="mock", region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"))
+    dynamodb = boto3.resource("dynamodb", endpoint_url=endpoint_url, aws_access_key_id="mock", aws_secret_access_key="mock", region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"))
 else:
     session = boto3.Session()
     s3_client = boto3.client("s3")
+    dynamodb = boto3.resource("dynamodb")
+
+# Initialize persistent DynamoDB clients
+state_store = DynamoDBStateStore()
+analyzer = StatefulSecurityAnalyzer(state_store=state_store)
+detections_table = dynamodb.Table("ot_detections")
 
 def lambda_handler(event, context):
     logger.info(f"Received event: {json.dumps(event)}")
@@ -55,7 +65,6 @@ def lambda_handler(event, context):
     logger.info(f"Processing {len(records)} SQS records.")
     
     for record in records:
-        # S3 notifications are wrapped in the SQS body
         try:
             body = json.loads(record.get("body", "{}"))
         except Exception as e:
@@ -72,11 +81,9 @@ def lambda_handler(event, context):
                 logger.warning(f"S3 record missing bucket name or object key: {s3_record}")
                 continue
                 
-            # URL decode the key
             object_key = urllib.parse.unquote_plus(object_key)
             logger.info(f"Processing file: s3://{bucket_name}/{object_key}")
             
-            # Download file to /tmp
             temp_path = f"/tmp/{os.path.basename(object_key)}"
             try:
                 s3_client.download_file(bucket_name, object_key, temp_path)
@@ -85,7 +92,6 @@ def lambda_handler(event, context):
                 continue
                 
             # Parse source and date from the S3 key structure
-            # e.g., source=ot_gateway/date=2026-05-19/log.json
             parts = object_key.split('/')
             source = "unknown"
             date_str = datetime.utcnow().strftime("%Y-%m-%d")
@@ -116,16 +122,17 @@ def lambda_handler(event, context):
                 
             logger.info(f"Selected log parser format: {log_format}")
             
-            # Parse logs streamingly
             valid_records = []
             failed_records = []
             
             try:
                 parser_instance = get_parser(log_format, temp_path)
                 with parser_instance as parser:
-                    for row in parser.parse():
+                    # Stream logs and execute security analyzer pipeline
+                    analyzed_stream = parse_stream(parser.parse(), [analyzer])
+                    
+                    for row in analyzed_stream:
                         if row.get("error"):
-                            # Capture failed log lines
                             failed_records.append({
                                 "raw_line": row.get("raw_line"),
                                 "error": row.get("error"),
@@ -134,19 +141,51 @@ def lambda_handler(event, context):
                                 "original_key": object_key
                             })
                         else:
-                            # Flatten/structure for Parquet columns
                             row["source"] = source
                             row["date"] = date_str
                             row["original_key"] = object_key
-                            # Ensure none of the fields are complex structures (nested dicts/lists) for standard parquet
-                            # If they are alerts or lists, JSON serialize them
+                            
+                            # Route alerts to DynamoDB detections table
+                            alerts = row.get("alerts", [])
+                            if alerts:
+                                for alert in alerts:
+                                    ip_or_host = row.get("ip") or row.get("hostname") or source or "unknown"
+                                    timestamp_str = row.get("timestamp") or datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+                                    
+                                    alert_reason = alert.get("alert_reason", "Generic Anomaly")
+                                    correlator = f"{alert_reason.replace(' ', '_')}#{ip_or_host}"
+                                    
+                                    # Map severity
+                                    severity = "LOW"
+                                    if alert_reason in ["SSH Brute Force", "Windows Brute Force", "OT Siemens S7comm PLC State Change", "Known Malicious IP"]:
+                                        severity = "HIGH"
+                                    elif alert_reason in ["Privilege Escalation", "OT Modbus Write Command", "Web Directory Scanning"]:
+                                        severity = "MEDIUM"
+                                        
+                                    try:
+                                        detections_table.put_item(
+                                            Item={
+                                                "incident_correlator": correlator,
+                                                "timestamp": timestamp_str,
+                                                "severity": severity,
+                                                "host": row.get("hostname") or source or "unknown",
+                                                "src_ip": row.get("ip") or "unknown",
+                                                "alert_reason": alert_reason,
+                                                "details": alert.get("details", ""),
+                                                "original_key": object_key
+                                            }
+                                        )
+                                        logger.info(f"Recorded alert in DynamoDB: {correlator}")
+                                    except Exception as db_err:
+                                        logger.error(f"Failed to write detection record to DynamoDB: {db_err}")
+                            
+                            # Flatten complex structures to prevent Parquet schema mismatch
                             for k, v in list(row.items()):
                                 if isinstance(v, (dict, list)):
                                     row[k] = json.dumps(v)
                             valid_records.append(row)
             except Exception as e:
                 logger.error(f"Parser execution failed for file {object_key}: {e}")
-                # Treat the whole file as unparseable
                 failed_records.append({
                     "raw_line": f"Entire file failed parsing: {object_key}",
                     "error": str(e),
@@ -155,12 +194,10 @@ def lambda_handler(event, context):
                     "original_key": object_key
                 })
                 
-            # Handle unparseable records (Route to DLQ bucket)
             if failed_records:
-                logger.warning(f"Found {len(failed_records)} unparseable records. Routing to DLQ bucket.")
+                logger.warning(f"Found {len(failed_records)} unparseable records. Routing to DLQ.")
                 dlq_key = f"unparseable/date={date_str}/source={source}/{os.path.basename(object_key)}_failed.json"
                 try:
-                    # Write failed records as a JSON line file in DLQ
                     dlq_content = "\n".join([json.dumps(r) for r in failed_records])
                     s3_client.put_object(
                         Bucket=dlq_bucket,
@@ -172,18 +209,14 @@ def lambda_handler(event, context):
                 except Exception as e:
                     logger.error(f"Failed to upload failed records to DLQ bucket: {e}")
                     
-            # Handle valid records (Convert and write as Parquet to Staged bucket)
             if valid_records:
                 logger.info(f"Found {len(valid_records)} valid records. Writing to staged bucket.")
                 try:
                     df = pd.DataFrame(valid_records)
-                    
-                    # Convert column types to string if they are mixed to prevent Parquet schema mismatch
                     for col in df.columns:
                         if df[col].dtype == object:
                             df[col] = df[col].astype(str)
                             
-                    # Write as Parquet partitioned by date and source
                     wr.s3.to_parquet(
                         df=df,
                         path=f"s3://{staged_bucket}/parsed/",
@@ -195,7 +228,6 @@ def lambda_handler(event, context):
                 except Exception as e:
                     logger.error(f"Failed to write Parquet files to staged bucket: {e}")
                     
-            # Clean up temp file
             if os.path.exists(temp_path):
                 os.remove(temp_path)
                 

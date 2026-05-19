@@ -5,25 +5,35 @@ try:
 except ImportError:
     geoip2 = None
 
-from .rules import SecurityRule, SSHBruteForceRule, PrivilegeEscalationRule, WebScanningRule, UserAgentAnomalyRule, WindowsFailedLogonRule
+from .rules import (
+    SecurityRule, SSHBruteForceRule, PrivilegeEscalationRule, 
+    WebScanningRule, UserAgentAnomalyRule, WindowsFailedLogonRule,
+    ModbusAnomalyRule, S7commAnomalyRule
+)
 from .threat_intel import ThreatIntelCache
+from .state_store import StateStore
 
 logger = logging.getLogger(__name__)
 
 class StatefulSecurityAnalyzer:
     """
     A middleware layer that analyzes logs for threats and enriches them with intelligence.
-    Sits between parsing and output.
+    Sits between parsing and output. Supports distributed state.
     """
-    def __init__(self, abuseipdb_key: Optional[str] = None, geoip_db_path: Optional[str] = None):
-        # Initialize rules
+    def __init__(self, state_store: Optional[StateStore] = None, abuseipdb_key: Optional[str] = None, geoip_db_path: Optional[str] = None):
+        self.state_store = state_store
+        
+        # Initialize rules with the distributed/local state store
         self.rules: List[SecurityRule] = [
-            SSHBruteForceRule(),
-            PrivilegeEscalationRule(),
-            WebScanningRule(),
-            UserAgentAnomalyRule(),
-            WindowsFailedLogonRule()
+            SSHBruteForceRule(state_store=state_store),
+            PrivilegeEscalationRule(state_store=state_store),
+            WebScanningRule(state_store=state_store),
+            UserAgentAnomalyRule(state_store=state_store),
+            WindowsFailedLogonRule(state_store=state_store),
+            ModbusAnomalyRule(state_store=state_store),
+            S7commAnomalyRule(state_store=state_store)
         ]
+        
         # Initialize threat intel cache
         self.intel_cache = ThreatIntelCache(abuseipdb_key)
         
@@ -46,6 +56,22 @@ class StatefulSecurityAnalyzer:
 
         # Initialize alerts list
         log["alerts"] = []
+
+        # Check for pre-existing alerts (e.g. from ot-sensor)
+        if "alert_type" in log:
+            log["alerts"].append({
+                "is_alert": True,
+                "alert_reason": log.get("alert_type"),
+                "details": log.get("description") or log.get("details") or f"Alert triggered by sensor: {log.get('alert_type')}"
+            })
+
+        # Check for firewall drops in iptables logs
+        if "rule_tag" in log and "DROP" in str(log.get("rule_tag")):
+            log["alerts"].append({
+                "is_alert": True,
+                "alert_reason": "Firewall Packet Drop",
+                "details": f"Packet dropped by firewall: {log.get('src_ip')} -> {log.get('dst_ip')} (In: {log.get('in_interface')}, Out: {log.get('out_interface')})"
+            })
 
         # 1. Evaluate detection rules
         for rule in self.rules:
@@ -74,10 +100,6 @@ class StatefulSecurityAnalyzer:
                     log['country'] = response.country.name
                     log['city'] = response.city.name
                     
-                    # ASN info might require a different database, but GeoLite2 City 
-                    # usually has some info or the geoip2 lib handles it if possible.
-                    # Note: For true ASN lookup, a GeoLite2-ASN.mmdb is typically needed.
-                    # We'll try to get it if the reader supports it.
                     try:
                         asn_response = self.geoip_reader.asn(ip)
                         log['asn'] = asn_response.autonomous_system_number
