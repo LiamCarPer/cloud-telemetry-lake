@@ -229,8 +229,11 @@ def lambda_handler(event, context):
                 try:
                     df = pd.DataFrame(valid_records)
                     for col in df.columns:
-                        if df[col].dtype == object:
+                        if col in ["src_port", "dest_port", "pid", "flow_id"]:
+                            df[col] = pd.to_numeric(df[col], errors='coerce').astype('Int64')
+                        elif df[col].dtype == object:
                             df[col] = df[col].astype(str)
+
                             
                     wr.s3.to_parquet(
                         df=df,

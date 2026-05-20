@@ -9,3 +9,10 @@ variable "environment" {
   description = "The deployment environment (e.g. dev, prod)"
   default     = "dev"
 }
+
+variable "enable_analytics" {
+  type        = bool
+  description = "Enable AWS Glue Catalog and Athena resources. Set to false when deploying on LocalStack Community Edition."
+  default     = false
+}
+

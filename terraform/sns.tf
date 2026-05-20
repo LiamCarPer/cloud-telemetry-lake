@@ -26,8 +26,8 @@ resource "aws_sns_topic" "incident_alerts" {
 # requiring real AWS email/SMS credentials.
 
 resource "aws_sqs_queue" "incident_notifications" {
-  name                      = "ot-incident-notifications"
-  message_retention_seconds = 86400 # 24h retention for inspection
+  name                       = "ot-incident-notifications"
+  message_retention_seconds  = 86400 # 24h retention for inspection
   visibility_timeout_seconds = 30
 
   tags = {

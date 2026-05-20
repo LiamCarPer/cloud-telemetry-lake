@@ -128,7 +128,60 @@ python3 src/malcolm_fixture/upload_malcolm_alerts.py --endpoint-url http://local
 
 ---
 
+## Analytics & Security Data Lake Querying
+
+### 1. Production AWS Architecture (Athena & Glue)
+In a production AWS environment, the structured telemetry and incident reports are queried using Amazon Athena. The database schemas are declared via Terraform in `terraform/analytics.tf`:
+- **Database**: `ot_telemetry`
+- **Tables**:
+  - `staged_telemetry`: An external snappy-parquet table mapped to `s3://ot-telemetry-staged-<account_id>/parsed/` partitioned by `date` (string) and `source` (string).
+  - `incident_reports`: An external JSON table mapped to `s3://ot-telemetry-reports-<account_id>/incidents/` parsing incident reports structure.
+
+*Note: Since Glue and Athena are premium APIs not implemented in the free LocalStack Community Edition, these resources are disabled by default in local deployments via the feature flag `enable_analytics = false`. Set this flag to `true` when deploying to a real AWS account.*
+
+### 2. AWS Athena Named Queries
+Three production-ready analytical queries are pre-defined in the repository:
+1. **High-Severity OT Anomalies Over Time**: Groups and aggregates high-severity alerts (`CROSS_ZONE_VIOLATION`, `UNAUTHORIZED_MODBUS_WRITE`, `OT_BRUTE_FORCE_SCAN`) by date and source.
+2. **Top Noisy Hosts**: Identifies the most active logging sources across the network.
+3. **SCADA TTP Patterns**: Parses nested Malcolm NDR JSON alerts, matching specific industrial attack signatures (e.g. Modbus function code violations, S7comm lateral movement).
+
+### 3. Local Analytics Query CLI
+To run these queries locally against the LocalStack emulation environment, a query client utility is provided. It uses `pandas` and `awswrangler` to run the identical SQL aggregates directly against the S3 staged parquet files:
+
+```bash
+AWS_ACCESS_KEY_ID=mock AWS_SECRET_ACCESS_KEY=mock AWS_DEFAULT_REGION=us-east-1 \
+AWS_ENDPOINT_URL=http://localhost:4566 \
+.venv/bin/python src/analytics/query_lake.py
+```
+
+Expected output:
+```text
+--- Security Data Lake Analytics CLI ---
+Reading telemetry from s3://ot-telemetry-staged-000000000000/parsed/ (Endpoint: http://localhost:4566)...
+Successfully loaded 24 telemetry logs.
+
+=== QUERY 1: High-Severity OT Anomalies Over Time ===
+      date    source  anomaly_count
+2026-05-20 ot_sensor             11
+
+=== QUERY 2: Top Noisy Hosts ===
+host_identifier  log_count
+         pop-os         11
+     ot-gateway          9
+    malcolm-ndr          4
+
+=== QUERY 3: SCADA TTP Patterns (Malcolm NDR) ===
+                      timestamp      src_ip     dest_ip scada_signature                                                      scada_category
+2026-05-20T19:27:26.798635+0000 172.24.0.10 172.21.0.10 ET SCADA Modbus Unauthorized Function Code from External Host            SCADA/ICS Attack
+2026-05-20T19:27:26.798635+0000 172.24.0.10 172.21.0.10 ET SCADA Modbus Write Single Register Attempt (FC 6)                    SCADA/ICS Attack
+2026-05-20T19:27:26.798635+0000 172.24.0.10 172.22.0.10 ET SCADA S7comm PLC Read/Write Coils – Lateral Movement                 SCADA/ICS Lateral Movement
+2026-05-20T19:27:26.798635+0000 172.24.0.10 172.21.0.10 ET SCADA Modbus Exception Response Flood – Brute Force/Scan            SCADA/ICS Reconnaissance
+```
+
+---
+
 ## Verification
+
 
 Once the simulation completes, Fluent Bit ships logs to S3, the parser Lambda processes them, and the aggregator Lambda generates an IR report. All steps can be verified via the AWS CLI against LocalStack.
 
