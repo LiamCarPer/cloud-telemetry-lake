@@ -1,19 +1,10 @@
 import os
 import sys
 
-print(f"DEBUG: sys.path is: {sys.path}")
-print(f"DEBUG: cwd is: {os.getcwd()}")
-try:
-    if os.path.exists('/opt'):
-        print(f"DEBUG: /opt contents: {os.listdir('/opt')}")
-        if os.path.exists('/opt/python'):
-            print(f"DEBUG: /opt/python contents: {os.listdir('/opt/python')[:10]}")
-    else:
-        print("DEBUG: /opt does not exist")
-except Exception as e:
-    print(f"DEBUG: Error listing /opt: {e}")
-
-# Append bundled dependencies path to sys.path before importing them
+# NOTE: LocalStack Community Edition workaround.
+# Standard Lambda layer mounting to /opt is not supported in community builds.
+# All dependencies (pandas, awswrangler, etc.) are bundled under python/ inside
+# this zip and injected into sys.path at cold-start time.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'python'))
 
 import json

@@ -4,6 +4,11 @@ resource "aws_dynamodb_table" "ot_detections" {
   hash_key     = "incident_correlator"
   range_key    = "timestamp"
 
+  # Enable Streams so the ot-incident-aggregator Lambda receives every new
+  # detection record in real time for incident grouping and IR report generation.
+  stream_enabled   = true
+  stream_view_type = "NEW_AND_OLD_IMAGES"
+
   attribute {
     name = "incident_correlator"
     type = "S"
