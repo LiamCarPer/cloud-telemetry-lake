@@ -17,18 +17,18 @@ Below is the telemetry ingestion and parsing pipeline flow:
 
 ```mermaid
 graph TD
-    subgraph OT Security Lab (Docker)
-        A[OT Attacker - 172.24.0.10] -- Unauthorized Modbus/TCP --> B(OT Gateway - 172.24.0.2 / 172.21.0.2)
+    subgraph "OT Security Lab (Docker)"
+        A[OT Attacker - 172.24.0.10] -- Unauthorized Modbus/TCP --> B("OT Gateway - 172.24.0.2 / 172.21.0.2")
         C[PLCs / HMI - 172.21.0.10] <. Blocked Zone Traffic .> B
         B -- Writes Logs --> D[alerts.json & iptables.log]
-        E[Fluent Bit Daemon] -- Tails & Gzips logs --> F(LocalStack S3 Raw Bucket)
+        E[Fluent Bit Daemon] -- Tails & Gzips logs --> F("LocalStack S3 Raw Bucket")
     end
 
-    subgraph Serverless Telemetry Lake (AWS LocalStack)
+    subgraph "Serverless Telemetry Lake (AWS LocalStack)"
         F -- S3 Put Event Notification --> G[SQS Ingest Queue]
         G -- Trigger --> H[Lambda Log Parser]
         H -- Write Alerts --> I[(DynamoDB ot_detections)]
-        H -- Write Staged Parquet --> J(S3 Staged Bucket)
+        H -- Write Staged Parquet --> J("S3 Staged Bucket")
     end
     
     style A fill:#f9f,stroke:#333,stroke-width:2px
