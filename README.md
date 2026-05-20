@@ -19,7 +19,7 @@ Below is the telemetry ingestion and parsing pipeline flow:
 graph TD
     subgraph "OT Security Lab (Docker)"
         A[OT Attacker - 172.24.0.10] -- Unauthorized Modbus/TCP --> B("OT Gateway - 172.24.0.2 / 172.21.0.2")
-        C[PLCs / HMI - 172.21.0.10] <. Blocked Zone Traffic .> B
+        C[PLCs / HMI - 172.21.0.10] -. "Blocked Zone Traffic" .-> B
         B -- Writes Logs --> D[alerts.json & iptables.log]
         E[Fluent Bit Daemon] -- Tails & Gzips logs --> F("LocalStack S3 Raw Bucket")
     end
