@@ -1,6 +1,18 @@
 import os
 import sys
 
+print(f"DEBUG: sys.path is: {sys.path}")
+print(f"DEBUG: cwd is: {os.getcwd()}")
+try:
+    if os.path.exists('/opt'):
+        print(f"DEBUG: /opt contents: {os.listdir('/opt')}")
+        if os.path.exists('/opt/python'):
+            print(f"DEBUG: /opt/python contents: {os.listdir('/opt/python')[:10]}")
+    else:
+        print("DEBUG: /opt does not exist")
+except Exception as e:
+    print(f"DEBUG: Error listing /opt: {e}")
+
 # Append bundled dependencies path to sys.path before importing them
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'python'))
 

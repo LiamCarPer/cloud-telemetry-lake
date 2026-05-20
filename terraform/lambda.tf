@@ -2,6 +2,10 @@ data "archive_file" "lambda_zip" {
   type        = "zip"
   source_dir  = "${path.module}/../src/parser_lambda"
   output_path = "${path.module}/../parser_lambda.zip"
+  excludes    = [
+    "python",
+    "python/**"
+  ]
 }
 
 resource "aws_lambda_layer_version" "pandas_layer" {
