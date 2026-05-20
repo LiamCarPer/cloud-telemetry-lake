@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'python'))
 import json
 import urllib.parse
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 import boto3
 import pandas as pd
 import awswrangler as wr
@@ -54,6 +54,70 @@ else:
 state_store = DynamoDBStateStore()
 analyzer = StatefulSecurityAnalyzer(state_store=state_store)
 detections_table = dynamodb.Table("ot_detections")
+
+import hashlib
+
+# Declarative Severity Registry mapping alert reasons to severity levels
+SEVERITY_MAPPING = {
+    # High Severity
+    "SSH Brute Force": "HIGH",
+    "Windows Brute Force": "HIGH",
+    "OT Siemens S7comm PLC State Change": "HIGH",
+    "Known Malicious IP": "HIGH",
+    "CROSS_ZONE_VIOLATION": "HIGH",
+    "OT_BRUTE_FORCE_SCAN": "HIGH",
+    # Medium Severity
+    "Privilege Escalation": "MEDIUM",
+    "OT Modbus Write Command": "MEDIUM",
+    "UNAUTHORIZED_MODBUS_WRITE": "MEDIUM",
+    "Web Directory Scanning": "MEDIUM"
+}
+
+def get_severity(alert_reason: str) -> str:
+    """Resolves alert severity dynamically from the registry with standard fallback."""
+    return SEVERITY_MAPPING.get(alert_reason, "LOW")
+
+def extract_partition_metadata(object_key: str) -> tuple:
+    """
+    Extracts partition source and date metadata from an S3 key path.
+    Supports Hive-partition formats (source=xxx/date=yyy) and flat structures.
+    """
+    parts = object_key.split('/')
+    source = "unknown"
+    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    
+    # 1. Look for explicit Hive key-value tags
+    for part in parts:
+        if "=" in part:
+            k, v = part.split('=', 1)
+            if k == "source":
+                source = v
+            elif k == "date":
+                date_str = v
+                
+    # 2. Heuristics fallback if partition source is still unknown
+    if source == "unknown":
+        for part in parts[:-1]: # exclude filename
+            part_lower = part.lower()
+            if any(s in part_lower for s in ["malcolm", "iptables", "syslog", "sensor"]):
+                source = part
+                break
+        else:
+            # Fallback to the first directory segment
+            if len(parts) > 1:
+                source = parts[0]
+                
+    return source, date_str
+
+def generate_event_id(original_key: str, timestamp: str, alert_reason: str, index: int) -> str:
+    """
+    Generates a deterministic 16-character SHA-256 hash representing a unique alert.
+    Ensures SQS retries are idempotent (overwrites) and simultaneous events do not clash.
+    """
+    hasher = hashlib.sha256()
+    raw_payload = f"{original_key}:{timestamp}:{alert_reason}:{index}"
+    hasher.update(raw_payload.encode("utf-8"))
+    return hasher.hexdigest()[:16]
 
 def lambda_handler(event, context):
     logger.info(f"Received event: {json.dumps(event)}")
@@ -107,21 +171,7 @@ def lambda_handler(event, context):
                 continue
                 
             # Parse source and date from the S3 key structure
-            parts = object_key.split('/')
-            source = "unknown"
-            date_str = datetime.utcnow().strftime("%Y-%m-%d")
-            
-            for part in parts:
-                if part.startswith("date="):
-                    date_str = part.split('=')[1]
-                elif part.startswith("source="):
-                    source = part.split('=')[1]
-                elif "=" not in part and part != parts[-1]:
-                    source = part
-                    
-            if len(parts) > 1 and source == "unknown" and "=" not in parts[0]:
-                source = parts[0]
-                
+            source, date_str = extract_partition_metadata(object_key)
             logger.info(f"Extracted partition values - Source: {source}, Date: {date_str}")
             
             # Select parser format based on file naming/structure
@@ -163,25 +213,26 @@ def lambda_handler(event, context):
                             # Route alerts to DynamoDB detections table
                             alerts = row.get("alerts", [])
                             if alerts:
-                                for alert in alerts:
+                                for idx, alert in enumerate(alerts):
                                     ip_or_host = row.get("ip") or row.get("hostname") or source or "unknown"
-                                    timestamp_str = row.get("timestamp") or datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+                                    timestamp_str = row.get("timestamp") or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                                     
                                     alert_reason = alert.get("alert_reason", "Generic Anomaly")
                                     correlator = f"{alert_reason.replace(' ', '_')}#{ip_or_host}"
                                     
-                                    # Map severity
-                                    severity = "LOW"
-                                    if alert_reason in ["SSH Brute Force", "Windows Brute Force", "OT Siemens S7comm PLC State Change", "Known Malicious IP"]:
-                                        severity = "HIGH"
-                                    elif alert_reason in ["Privilege Escalation", "OT Modbus Write Command", "Web Directory Scanning"]:
-                                        severity = "MEDIUM"
-                                        
+                                    # Dynamically resolve severity using registry helper
+                                    severity = get_severity(alert_reason)
+                                    
+                                    # Generate deterministic event hash for idempotency and uniqueness
+                                    event_hash = generate_event_id(object_key, timestamp_str, alert_reason, idx)
+                                    range_key_timestamp = f"{timestamp_str}#{event_hash}"
+                                    
                                     try:
                                         detections_table.put_item(
                                             Item={
                                                 "incident_correlator": correlator,
-                                                "timestamp": timestamp_str,
+                                                "timestamp": range_key_timestamp,
+                                                "event_timestamp": timestamp_str,
                                                 "severity": severity,
                                                 "host": row.get("hostname") or source or "unknown",
                                                 "src_ip": row.get("ip") or "unknown",
@@ -190,7 +241,7 @@ def lambda_handler(event, context):
                                                 "original_key": object_key
                                             }
                                         )
-                                        logger.info(f"Recorded alert in DynamoDB: {correlator}")
+                                        logger.info(f"Recorded alert in DynamoDB: {correlator} (Sort Key: {range_key_timestamp})")
                                     except Exception as db_err:
                                         logger.error(f"Failed to write detection record to DynamoDB: {db_err}")
                             
