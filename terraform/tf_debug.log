@@ -1,0 +1,43 @@
+2026-05-20T16:24:22.500+0200 [INFO]  Terraform version: 1.8.3
+2026-05-20T16:24:22.501+0200 [DEBUG] using github.com/hashicorp/go-tfe v1.51.0
+2026-05-20T16:24:22.501+0200 [DEBUG] using github.com/hashicorp/hcl/v2 v2.20.0
+2026-05-20T16:24:22.501+0200 [DEBUG] using github.com/hashicorp/terraform-svchost v0.1.1
+2026-05-20T16:24:22.501+0200 [DEBUG] using github.com/zclconf/go-cty v1.14.3
+2026-05-20T16:24:22.501+0200 [INFO]  Go runtime version: go1.22.1
+2026-05-20T16:24:22.501+0200 [INFO]  CLI args: []string{"terraform", "plan"}
+2026-05-20T16:24:22.501+0200 [DEBUG] Attempting to open CLI config file: /home/liamcarvajal/.terraformrc
+2026-05-20T16:24:22.501+0200 [DEBUG] File doesn't exist, but doesn't need to. Ignoring.
+2026-05-20T16:24:22.503+0200 [DEBUG] ignoring non-existing provider search directory terraform.d/plugins
+2026-05-20T16:24:22.503+0200 [DEBUG] ignoring non-existing provider search directory /home/liamcarvajal/.terraform.d/plugins
+2026-05-20T16:24:22.504+0200 [DEBUG] ignoring non-existing provider search directory /home/liamcarvajal/.local/share/terraform/plugins
+2026-05-20T16:24:22.504+0200 [DEBUG] ignoring non-existing provider search directory /home/liamcarvajal/.local/share/flatpak/exports/share/terraform/plugins
+2026-05-20T16:24:22.504+0200 [DEBUG] ignoring non-existing provider search directory /var/lib/flatpak/exports/share/terraform/plugins
+2026-05-20T16:24:22.504+0200 [DEBUG] ignoring non-existing provider search directory /usr/local/share/terraform/plugins
+2026-05-20T16:24:22.504+0200 [DEBUG] ignoring non-existing provider search directory /usr/share/terraform/plugins
+2026-05-20T16:24:22.505+0200 [INFO]  CLI command args: []string{"plan"}
+2026-05-20T16:24:22.602+0200 [DEBUG] New state was assigned lineage "9b7f1f2f-79cd-0f79-d9b4-740c31561b29"
+2026-05-20T16:24:26.607+0200 [DEBUG] checking for provisioner in "."
+2026-05-20T16:24:26.612+0200 [DEBUG] checking for provisioner in "/home/liamcarvajal/.local/bin"
+2026-05-20T16:24:26.675+0200 [INFO]  backend/local: starting Plan operation
+2026-05-20T16:24:26.781+0200 [DEBUG] created provider logger: level=debug
+2026-05-20T16:24:26.782+0200 [INFO]  provider: configuring client automatic mTLS
+2026-05-20T16:24:26.809+0200 [DEBUG] provider: starting plugin: path=.terraform/providers/registry.terraform.io/hashicorp/archive/2.8.0/linux_amd64/terraform-provider-archive_v2.8.0_x5 args=[".terraform/providers/registry.terraform.io/hashicorp/archive/2.8.0/linux_amd64/terraform-provider-archive_v2.8.0_x5"]
+2026-05-20T16:24:26.847+0200 [DEBUG] provider: plugin started: path=.terraform/providers/registry.terraform.io/hashicorp/archive/2.8.0/linux_amd64/terraform-provider-archive_v2.8.0_x5 pid=1034329
+2026-05-20T16:24:26.847+0200 [DEBUG] provider: waiting for RPC address: path=.terraform/providers/registry.terraform.io/hashicorp/archive/2.8.0/linux_amd64/terraform-provider-archive_v2.8.0_x5
+2026-05-20T16:24:26.958+0200 [INFO]  provider.terraform-provider-archive_v2.8.0_x5: configuring server automatic mTLS: timestamp="2026-05-20T16:24:26.958+0200"
+2026-05-20T16:24:26.976+0200 [DEBUG] provider.terraform-provider-archive_v2.8.0_x5: plugin address: address=/tmp/plugin3031749983 network=unix timestamp="2026-05-20T16:24:26.976+0200"
+2026-05-20T16:24:26.976+0200 [DEBUG] provider: using plugin: version=5
+2026-05-20T16:24:27.008+0200 [DEBUG] No provider meta schema returned
+2026-05-20T16:24:27.009+0200 [DEBUG] provider.stdio: received EOF, stopping recv loop: err="rpc error: code = Unavailable desc = error reading from server: EOF"
+2026-05-20T16:24:27.011+0200 [DEBUG] provider: plugin process exited: path=.terraform/providers/registry.terraform.io/hashicorp/archive/2.8.0/linux_amd64/terraform-provider-archive_v2.8.0_x5 pid=1034329
+2026-05-20T16:24:27.111+0200 [DEBUG] provider: plugin exited
+2026-05-20T16:24:27.112+0200 [DEBUG] created provider logger: level=debug
+2026-05-20T16:24:27.112+0200 [INFO]  provider: configuring client automatic mTLS
+2026-05-20T16:24:27.118+0200 [DEBUG] provider: starting plugin: path=.terraform/providers/registry.terraform.io/hashicorp/aws/5.100.0/linux_amd64/terraform-provider-aws_v5.100.0_x5 args=[".terraform/providers/registry.terraform.io/hashicorp/aws/5.100.0/linux_amd64/terraform-provider-aws_v5.100.0_x5"]
+2026-05-20T16:24:27.137+0200 [DEBUG] provider: plugin started: path=.terraform/providers/registry.terraform.io/hashicorp/aws/5.100.0/linux_amd64/terraform-provider-aws_v5.100.0_x5 pid=1034359
+2026-05-20T16:24:27.137+0200 [DEBUG] provider: waiting for RPC address: path=.terraform/providers/registry.terraform.io/hashicorp/aws/5.100.0/linux_amd64/terraform-provider-aws_v5.100.0_x5
+2026-05-20T16:24:36.971+0200 [DEBUG] provider.terraform-provider-aws_v5.100.0_x5: Starting github.com/hashicorp/terraform-provider-aws@5.100.0 (go1.23.10)...
+2026-05-20T16:24:37.045+0200 [DEBUG] provider.terraform-provider-aws_v5.100.0_x5: Initializing Terraform AWS Provider...
+2026-05-20T16:24:47.846+0200 [INFO]  provider.terraform-provider-aws_v5.100.0_x5: configuring server automatic mTLS: timestamp="2026-05-20T16:24:47.832+0200"
+2026-05-20T16:24:47.850+0200 [DEBUG] provider: using plugin: version=5
+2026-05-20T16:24:47.867+0200 [DEBUG] provider.terraform-provider-aws_v5.100.0_x5: plugin address: address=/tmp/plugin1774215720 network=unix timestamp="2026-05-20T16:24:47.846+0200"

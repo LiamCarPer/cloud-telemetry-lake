@@ -99,8 +99,20 @@ def lambda_handler(event, context):
             temp_path = f"/tmp/{os.path.basename(object_key)}"
             try:
                 s3_client.download_file(bucket_name, object_key, temp_path)
+                # Check if the downloaded file is gzipped (starts with gzip magic number 1f 8b)
+                is_gz = False
+                with open(temp_path, 'rb') as f:
+                    if f.read(2) == b'\x1f\x8b':
+                        is_gz = True
+                if is_gz:
+                    new_path = temp_path + ".gz"
+                    if os.path.exists(new_path):
+                        os.remove(new_path)
+                    os.rename(temp_path, new_path)
+                    temp_path = new_path
+                    logger.info(f"Detected gzipped content. Renamed temp path to: {temp_path}")
             except Exception as e:
-                logger.error(f"Failed to download file s3://{bucket_name}/{object_key} to {temp_path}: {e}")
+                logger.error(f"Failed to download or check file s3://{bucket_name}/{object_key} to {temp_path}: {e}")
                 continue
                 
             # Parse source and date from the S3 key structure
