@@ -4,6 +4,10 @@ Product: OT Telemetry Data Lake & Detection-as-Code on AWS
 Owner: Liam Carvajal
 Status: Draft
 Last Updated: 2026-05-19
+
+> **Note:** This document records requirements and target metrics, not delivery
+> status. What is implemented today, and what is deliberately out of scope, is
+> listed in the repository README under *Known Limitations*.
 1. Overview
 1.1 Summary
 

@@ -4,6 +4,7 @@
 [![Environment](https://img.shields.io/badge/LocalStack-Community-blue?logo=localstack)](https://localstack.cloud/)
 [![Pipeline](https://img.shields.io/badge/Telemetry-Fluent%20Bit-orange?logo=fluentbit)](https://fluentbit.io/)
 [![Ingestion](https://img.shields.io/badge/Ingestion-AWS%20Lambda%20%26%20Pandas-yellow?logo=aws-lambda)](https://aws.amazon.com/lambda/)
+[![CI](https://github.com/LiamCarPer/cloud-telemetry-lake/actions/workflows/ci.yml/badge.svg)](https://github.com/LiamCarPer/cloud-telemetry-lake/actions/workflows/ci.yml)
 
 An end-to-end industrial cybersecurity telemetry pipeline that ingests, parses, analyzes, and archives security event logs generated from a simulated Operational Technology (OT) network segmented according to the **Purdue Reference Model**.
 
@@ -55,7 +56,7 @@ graph TD
 *   **Structured Log Shipping:** Fluent Bit collects, compresses, and ships log streams to S3 with Hive-partitioned keys (`source=`, `date=`).
 *   **Serverless Ingestion Pipeline:** S3 events → SQS → Lambda parses and routes logs with dynamic gzip detection.
 *   **Stateful Security Correlation:** Detection records written to DynamoDB with GSIs for severity and host-based querying.
-*   **Automated Incident Response:** DynamoDB Streams trigger the aggregator Lambda to produce NIST SP 800-61 IR reports and publish SOC alerts via SNS.
+*   **Automated Incident Response:** DynamoDB Streams trigger the aggregator Lambda to produce NIST SP 800-61 IR reports, grouped into deterministic `INCIDENT_WINDOW_SECONDS` windows so a retried stream batch regenerates the same report, and publish SOC alerts via SNS.
 *   **Analytical Storage:** Parsed logs staged as snappy-compressed Apache Parquet, partitioned by source and date.
 
 ---
@@ -67,6 +68,18 @@ This project is deployed against **LocalStack Community Edition** as a local AWS
 1.  **Fat-Zip Dependency Packaging:** LocalStack Community does not mount Lambda Layers to `/opt` at runtime. Dependencies (`pandas`, `awswrangler`, etc.) are bundled directly inside the deployment archive under `python/` and injected into `sys.path` at cold-start time.
 2.  **S3-Based Lambda Deployment:** The fat-zip archive exceeds the 50 MB AWS direct API upload limit. Terraform stages the zip to S3 first (`aws_s3_object`) and provisions the function by S3 reference (`s3_bucket` / `s3_key`).
 3.  **Dynamic Gzip Detection:** Fluent Bit uploads gzip-compressed payloads with a `.json` key extension. The Lambda handler inspects the first two magic bytes (`\x1f\x8b`) at runtime and renames the file with a `.gz` suffix before passing it to the parser, enabling transparent decompression.
+
+All three workarounds are reversible: the Terraform variables `localstack_endpoint` (set to `""`) and `force_destroy` (set to `false`) switch the stack to a real AWS account, and the dependency excludes in `terraform/lambda.tf` are already stubbed out in comments for a standard Lambda layer deployment. The Fluent Bit outputs default to the LocalStack endpoint with TLS off; for production, point them at the regional S3 endpoint and set `tls on`.
+
+---
+
+## Reliability & Failure Handling
+
+*   **Selective SQS retries:** the parser Lambda implements partial batch responses (`ReportBatchItemFailures`). Only messages that failed for transient reasons (object download, DynamoDB, Parquet or DLQ writes) are returned to the queue; records that are routed to the S3 DLQ bucket by design are acknowledged.
+*   **Ingest dead-letter queue:** `ot-log-ingest-queue` redrives to `ot-log-ingest-dlq` after 3 failed receives.
+*   **Idempotent detections:** every detection row carries a deterministic 16-character SHA-256 event ID inside its sort key (`timestamp#event_hash`), so an SQS retry overwrites the same DynamoDB item instead of duplicating it.
+*   **Idempotent incident reports:** the aggregator derives a UUIDv5 incident ID from the incident window and the sorted detection identities; a retried DynamoDB Streams batch rewrites the same `incidents/<id>.json` object.
+*   **Unparseable records:** individual lines that fail parsing are written to the DLQ bucket under `unparseable/date=<date>/source=<source>/`, preserving the original error for review.
 
 ---
 
@@ -126,6 +139,14 @@ Uploads a batch of Suricata EVE-format alerts simulating a Malcolm NDR sensor fe
 python3 src/malcolm_fixture/upload_malcolm_alerts.py --endpoint-url http://localhost:4566
 ```
 
+### 7. Run the Tests
+
+```bash
+python3 -m unittest discover -s tests -t . -v
+```
+
+The suite covers the parser helpers, the seven detection rules (including rolling-window expiry), the DynamoDB state-store maths, SQS partial batch responses, and NIST report construction. `make test` runs the same command.
+
 ---
 
 ## Analytics & Security Data Lake Querying
@@ -177,6 +198,18 @@ host_identifier  log_count
 2026-05-20T19:27:26.798635+0000 172.24.0.10 172.22.0.10 ET SCADA S7comm PLC Read/Write Coils – Lateral Movement                 SCADA/ICS Lateral Movement
 2026-05-20T19:27:26.798635+0000 172.24.0.10 172.21.0.10 ET SCADA Modbus Exception Response Flood – Brute Force/Scan            SCADA/ICS Reconnaissance
 ```
+
+---
+
+## Known Limitations
+
+*   **Lab-scale, not production-scale.** The PRD (`docs/specs.md`) records target metrics (ingest latency, P95 detection latency, Lambda success rate). They are **not measured yet**: there is no load test, and no CloudWatch alarms are configured.
+*   **Incident grouping is per DynamoDB Streams batch, anchored to a time window.** Detections arriving in separate batches are not merged into a single incident, and there is no cross-batch correlation state.
+*   **Glue and Athena resources are declarative.** They are disabled by default (`enable_analytics = false`) because LocalStack Community does not implement those APIs; the DDL and named queries are validated by Terraform, not executed against real AWS.
+*   **Threat-intel enrichment is optional.** AbuseIPDB enrichment is active only when `ABUSEIPDB_API_KEY` is set. GeoIP enrichment exists in the analyzer but is not wired into the Lambda deployment.
+*   **Objects are staged to `/tmp` before parsing.** The Lambda downloads each object to `/tmp` and then parses it line-by-line from disk rather than streaming directly from S3.
+*   **Staged Parquet is at-least-once under retries.** Detection writes and incident reports are idempotent, but a retried SQS message can re-append its batch as new Parquet files, so the staged dataset may contain duplicate rows after a partial failure. Deduplication is left to the query layer.
+*   **Unit coverage, not integration coverage.** The deployed pipeline is verified manually with the AWS CLI commands below; it is not exercised by an automated end-to-end test.
 
 ---
 
