@@ -44,17 +44,19 @@ resource "aws_lambda_function" "parser_lambda" {
 
   environment {
     variables = {
-      RAW_BUCKET       = aws_s3_bucket.telemetry_buckets["raw"].id
-      STAGED_BUCKET    = aws_s3_bucket.telemetry_buckets["staged"].id
-      DLQ_BUCKET       = aws_s3_bucket.telemetry_buckets["dlq"].id
-      AWS_ENDPOINT_URL = "http://localhost:4566"
+      RAW_BUCKET        = aws_s3_bucket.telemetry_buckets["raw"].id
+      STAGED_BUCKET     = aws_s3_bucket.telemetry_buckets["staged"].id
+      DLQ_BUCKET        = aws_s3_bucket.telemetry_buckets["dlq"].id
+      AWS_ENDPOINT_URL  = var.localstack_endpoint
+      ABUSEIPDB_API_KEY = var.abuseipdb_api_key
     }
   }
 }
 
 resource "aws_lambda_event_source_mapping" "sqs_trigger" {
-  event_source_arn = aws_sqs_queue.ingest_queue.arn
-  function_name    = aws_lambda_function.parser_lambda.arn
-  batch_size       = 5
-  enabled          = true
+  event_source_arn        = aws_sqs_queue.ingest_queue.arn
+  function_name           = aws_lambda_function.parser_lambda.arn
+  batch_size              = 5
+  enabled                 = true
+  function_response_types = ["ReportBatchItemFailures"]
 }

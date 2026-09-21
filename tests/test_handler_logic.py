@@ -1,6 +1,7 @@
 import unittest
 import sys
 import os
+import json
 
 # Add the lambda source path so handler can be imported
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src/parser_lambda')))
@@ -63,6 +64,59 @@ class TestHandlerLogic(unittest.TestCase):
         self.assertEqual(id1, id2)
         self.assertNotEqual(id1, id3)
         self.assertEqual(len(id1), 16)
+
+@patch.dict(os.environ, {"STAGED_BUCKET": "ot-telemetry-staged-test", "DLQ_BUCKET": "ot-telemetry-dlq-test"})
+class TestHandlerBatchFailures(unittest.TestCase):
+    """SQS partial batch response behaviour (ReportBatchItemFailures)."""
+
+    def _sqs_event(self, body, message_id):
+        return {"Records": [{"messageId": message_id, "body": body}]}
+
+    def test_invalid_json_body_is_reported_as_failure(self):
+        result = handler.lambda_handler(self._sqs_event("{not-json", "msg-invalid"), None)
+        self.assertEqual(result["batchItemFailures"], [{"itemIdentifier": "msg-invalid"}])
+
+    def test_message_without_s3_records_is_acknowledged(self):
+        result = handler.lambda_handler(
+            self._sqs_event(json.dumps({"Records": []}), "msg-empty"), None
+        )
+        self.assertEqual(result["batchItemFailures"], [])
+
+    def test_missing_bucket_or_key_is_reported_as_failure(self):
+        body = json.dumps({"Records": [{"s3": {"bucket": {"name": "raw"}, "object": {}}}]})
+        result = handler.lambda_handler(self._sqs_event(body, "msg-malformed"), None)
+        self.assertEqual(result["batchItemFailures"], [{"itemIdentifier": "msg-malformed"}])
+
+    def test_download_failure_is_reported_as_failure(self):
+        body = json.dumps({
+            "Records": [{
+                "s3": {
+                    "bucket": {"name": "raw"},
+                    "object": {"key": "source=syslog/date=2026-05-20/events.json"},
+                }
+            }]
+        })
+        with patch.object(handler.s3_client, "download_file", side_effect=RuntimeError("connection reset")):
+            result = handler.lambda_handler(self._sqs_event(body, "msg-download"), None)
+        self.assertEqual(result["batchItemFailures"], [{"itemIdentifier": "msg-download"}])
+
+    def test_parseable_file_is_acknowledged(self):
+        def fake_download(bucket, key, path):
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("")
+
+        body = json.dumps({
+            "Records": [{
+                "s3": {
+                    "bucket": {"name": "raw"},
+                    "object": {"key": "source=syslog/date=2026-05-20/empty.log"},
+                }
+            }]
+        })
+        with patch.object(handler.s3_client, "download_file", side_effect=fake_download):
+            result = handler.lambda_handler(self._sqs_event(body, "msg-ok"), None)
+        self.assertEqual(result["batchItemFailures"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

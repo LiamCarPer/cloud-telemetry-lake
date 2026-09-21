@@ -28,6 +28,11 @@ output "sqs_queue_arn" {
   description = "The ARN of the ingest SQS queue."
 }
 
+output "sqs_dlq_url" {
+  value       = aws_sqs_queue.ingest_dlq.id
+  description = "The URL of the ingest dead-letter queue (messages that fail after retries)."
+}
+
 output "lambda_arn" {
   value       = aws_lambda_function.parser_lambda.arn
   description = "The ARN of the parser Lambda function."

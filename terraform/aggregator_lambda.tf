@@ -38,7 +38,7 @@ resource "aws_lambda_function" "aggregator_lambda" {
       REPORTS_BUCKET          = aws_s3_bucket.telemetry_buckets["reports"].id
       SNS_TOPIC_ARN           = aws_sns_topic.incident_alerts.arn
       INCIDENT_WINDOW_SECONDS = "300"
-      AWS_ENDPOINT_URL        = "http://localhost:4566"
+      AWS_ENDPOINT_URL        = var.localstack_endpoint
     }
   }
 

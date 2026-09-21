@@ -1,6 +1,18 @@
+# Dead-letter queue for messages the parser cannot process after retries.
+# Transient failures are selectively retried via ReportBatchItemFailures.
+resource "aws_sqs_queue" "ingest_dlq" {
+  name = "ot-log-ingest-dlq"
+}
+
 resource "aws_sqs_queue" "ingest_queue" {
-  name                      = "ot-log-ingest-queue"
-  receive_wait_time_seconds = 10
+  name                       = "ot-log-ingest-queue"
+  receive_wait_time_seconds  = 10
+  visibility_timeout_seconds = 360 # >= parser Lambda timeout (180s) plus margin
+
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.ingest_dlq.arn
+    maxReceiveCount     = 3
+  })
 }
 
 resource "aws_sqs_queue_policy" "ingest_queue_policy" {

@@ -52,7 +52,10 @@ else:
 
 # Initialize persistent DynamoDB clients
 state_store = DynamoDBStateStore()
-analyzer = StatefulSecurityAnalyzer(state_store=state_store)
+analyzer = StatefulSecurityAnalyzer(
+    state_store=state_store,
+    abuseipdb_key=os.environ.get("ABUSEIPDB_API_KEY") or None,
+)
 detections_table = dynamodb.Table("ot_detections")
 
 import hashlib
@@ -130,22 +133,33 @@ def lambda_handler(event, context):
         
     records = event.get("Records", [])
     logger.info(f"Processing {len(records)} SQS records.")
-    
+
+    # SQS partial batch responses: only messages listed here are retried.
+    # Messages that are successfully handled (including records routed to the
+    # S3 DLQ bucket by design) are acknowledged.
+    batch_item_failures = []
+
     for record in records:
+        message_id = record.get("messageId")
+        record_failed = False
+
         try:
             body = json.loads(record.get("body", "{}"))
         except Exception as e:
             logger.error(f"Failed to parse SQS message body as JSON: {e}")
+            if message_id:
+                batch_item_failures.append({"itemIdentifier": message_id})
             continue
-            
+
         s3_records = body.get("Records", [])
         for s3_record in s3_records:
             s3_data = s3_record.get("s3", {})
             bucket_name = s3_data.get("bucket", {}).get("name")
             object_key = s3_data.get("object", {}).get("key")
-            
+
             if not bucket_name or not object_key:
                 logger.warning(f"S3 record missing bucket name or object key: {s3_record}")
+                record_failed = True
                 continue
                 
             object_key = urllib.parse.unquote_plus(object_key)
@@ -168,6 +182,7 @@ def lambda_handler(event, context):
                     logger.info(f"Detected gzipped content. Renamed temp path to: {temp_path}")
             except Exception as e:
                 logger.error(f"Failed to download or check file s3://{bucket_name}/{object_key} to {temp_path}: {e}")
+                record_failed = True
                 continue
                 
             # Parse source and date from the S3 key structure
@@ -244,6 +259,7 @@ def lambda_handler(event, context):
                                         logger.info(f"Recorded alert in DynamoDB: {correlator} (Sort Key: {range_key_timestamp})")
                                     except Exception as db_err:
                                         logger.error(f"Failed to write detection record to DynamoDB: {db_err}")
+                                        record_failed = True
                             
                             # Flatten complex structures to prevent Parquet schema mismatch
                             for k, v in list(row.items()):
@@ -274,6 +290,7 @@ def lambda_handler(event, context):
                     logger.info(f"Successfully uploaded failed records to s3://{dlq_bucket}/{dlq_key}")
                 except Exception as e:
                     logger.error(f"Failed to upload failed records to DLQ bucket: {e}")
+                    record_failed = True
                     
             if valid_records:
                 logger.info(f"Found {len(valid_records)} valid records. Writing to staged bucket.")
@@ -296,11 +313,15 @@ def lambda_handler(event, context):
                     logger.info(f"Successfully wrote Parquet file to s3://{staged_bucket}/parsed/")
                 except Exception as e:
                     logger.error(f"Failed to write Parquet files to staged bucket: {e}")
+                    record_failed = True
                     
             if os.path.exists(temp_path):
                 os.remove(temp_path)
-                
-    return {
-        "statusCode": 200,
-        "body": json.dumps("Processing complete.")
-    }
+
+        if record_failed and message_id:
+            logger.warning(f"Marking SQS message {message_id} as failed for retry.")
+            batch_item_failures.append({"itemIdentifier": message_id})
+
+    if batch_item_failures:
+        logger.warning(f"Reporting {len(batch_item_failures)} batch item failure(s) to SQS.")
+    return {"batchItemFailures": batch_item_failures}

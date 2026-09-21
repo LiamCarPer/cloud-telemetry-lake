@@ -13,7 +13,7 @@ locals {
 resource "aws_s3_bucket" "telemetry_buckets" {
   for_each      = local.bucket_names
   bucket        = each.value
-  force_destroy = true # Convenient for development / clean testing
+  force_destroy = var.force_destroy
 }
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "sse" {
