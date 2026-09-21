@@ -61,6 +61,12 @@ sns_client = boto3.client("sns", **_client_kwargs)
 REPORTS_BUCKET = os.environ.get("REPORTS_BUCKET")
 SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN")
 
+try:
+    INCIDENT_WINDOW_SECONDS = int(os.environ.get("INCIDENT_WINDOW_SECONDS", "300"))
+except ValueError:
+    logger.warning("Invalid INCIDENT_WINDOW_SECONDS value; falling back to 300 seconds.")
+    INCIDENT_WINDOW_SECONDS = 300
+
 # ---------------------------------------------------------------------------
 # DynamoDB AttributeValue deserialiser
 # ---------------------------------------------------------------------------
@@ -104,8 +110,8 @@ def lambda_handler(event, context):
 
     logger.info(f"Aggregating {len(detections)} detection(s) into an incident report.")
 
-    # Build the NIST SP 800-61 IR report
-    report = build_report(detections)
+    # Build the NIST SP 800-61 IR report, grouped into a deterministic time window
+    report = build_report(detections, window_seconds=INCIDENT_WINDOW_SECONDS)
     incident_id = report["incident_id"]
 
     # ------------------------------------------------------------------
@@ -140,6 +146,8 @@ def lambda_handler(event, context):
             "mitre_techniques": report["mitre_techniques"],
             "affected_assets": report["affected_assets"],
             "nist_phase": report["nist_phase"],
+            "window_start": report["window_start"],
+            "window_end": report["window_end"],
             "report_s3_uri": f"s3://{REPORTS_BUCKET}/{report_key}",
             "created_at": report["created_at"],
         },
