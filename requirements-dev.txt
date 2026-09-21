@@ -1,0 +1,4 @@
+# Test/runtime dependencies required to import the Lambda handlers.
+boto3>=1.34,<2
+pandas>=2.0
+awswrangler>=3.5
