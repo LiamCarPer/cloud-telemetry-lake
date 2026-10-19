@@ -23,15 +23,16 @@ resource "aws_s3_object" "aggregator_zip_upload" {
 }
 
 resource "aws_lambda_function" "aggregator_lambda" {
-  s3_bucket        = aws_s3_bucket.telemetry_buckets["raw"].id
-  s3_key           = aws_s3_object.aggregator_zip_upload.key
-  function_name    = "ot-incident-aggregator"
-  role             = aws_iam_role.aggregator_lambda_exec.arn
-  handler          = "handler.lambda_handler"
-  runtime          = "python3.12"
-  timeout          = 60
-  memory_size      = 256
-  source_code_hash = data.archive_file.aggregator_zip.output_base64sha256
+  s3_bucket                      = aws_s3_bucket.telemetry_buckets["raw"].id
+  s3_key                         = aws_s3_object.aggregator_zip_upload.key
+  function_name                  = "ot-incident-aggregator"
+  role                           = aws_iam_role.aggregator_lambda_exec.arn
+  handler                        = "handler.lambda_handler"
+  runtime                        = "python3.12"
+  timeout                        = 60
+  memory_size                    = 256
+  reserved_concurrent_executions = var.lambda_reserved_concurrency
+  source_code_hash               = data.archive_file.aggregator_zip.output_base64sha256
 
   environment {
     variables = {
@@ -42,6 +43,14 @@ resource "aws_lambda_function" "aggregator_lambda" {
     }
   }
 
+  kms_key_arn = aws_kms_key.telemetry.arn
+
+  dead_letter_config {
+    target_arn = aws_sqs_queue.aggregator_dlq.arn
+  }
+
+  depends_on = [aws_cloudwatch_log_group.aggregator]
+
   tags = {
     Environment = var.environment
     Project     = "ot-telemetry"
@@ -49,9 +58,17 @@ resource "aws_lambda_function" "aggregator_lambda" {
 }
 
 resource "aws_lambda_event_source_mapping" "dynamodb_stream_trigger" {
-  event_source_arn  = aws_dynamodb_table.ot_detections.stream_arn
-  function_name     = aws_lambda_function.aggregator_lambda.arn
-  starting_position = "LATEST"
-  batch_size        = 10
-  enabled           = true
+  event_source_arn               = aws_dynamodb_table.ot_detections.stream_arn
+  function_name                  = aws_lambda_function.aggregator_lambda.arn
+  starting_position              = "LATEST"
+  batch_size                     = 10
+  enabled                        = true
+  maximum_retry_attempts         = 3
+  bisect_batch_on_function_error = true
+
+  destination_config {
+    on_failure {
+      destination_arn = aws_sqs_queue.aggregator_dlq.arn
+    }
+  }
 }

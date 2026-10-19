@@ -8,5 +8,11 @@ __pycache__/
 *.parquet
 tmp_downloads/
 
+# Local secrets / credentials
+.env
+.env.*
+*.pem
+*.key
+
 # Lambda bundled dependencies
 src/parser_lambda/python/

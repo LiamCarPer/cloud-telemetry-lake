@@ -47,6 +47,9 @@ MITRE_MAP: Dict[str, str] = {
     "OT_BRUTE_FORCE_SCAN": "T0846",
     "PROCESS_SAFETY_VIOLATION": "T0835",
     "IPTABLES_DROP": "T0886",  # Firewall-blocked cross-zone traffic maps to Network Connection Enumeration
+    # Parser-level rule reasons (the analyzer emits these directly)
+    "OT Modbus Write Command": "T0831",
+    "OT Siemens S7comm PLC State Change": "T0813",
 }
 
 SEVERITY_ORDER: Dict[str, int] = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}

@@ -10,6 +10,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'python'))
 import json
 import urllib.parse
 import logging
+import shutil
+import tempfile
 from datetime import datetime, timezone
 import boto3
 import pandas as pd
@@ -39,23 +41,66 @@ elif not endpoint_url and os.environ.get("LOCALSTACK_HOSTNAME"):
 if endpoint_url:
     logger.info(f"Using custom endpoint URL: {endpoint_url}")
     session = boto3.Session(
-        aws_access_key_id="mock",
-        aws_secret_access_key="mock",
+        aws_access_key_id="mock",  # nosec B106
+        aws_secret_access_key="mock",  # nosec B106
         region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
     )
-    s3_client = boto3.client("s3", endpoint_url=endpoint_url, aws_access_key_id="mock", aws_secret_access_key="mock", region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"))
-    dynamodb = boto3.resource("dynamodb", endpoint_url=endpoint_url, aws_access_key_id="mock", aws_secret_access_key="mock", region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"))
+    s3_client = boto3.client("s3", endpoint_url=endpoint_url, aws_access_key_id="mock", aws_secret_access_key="mock", region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"))  # nosec B106
+    dynamodb = boto3.resource("dynamodb", endpoint_url=endpoint_url, aws_access_key_id="mock", aws_secret_access_key="mock", region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"))  # nosec B106
+    secrets_client = boto3.client("secretsmanager", endpoint_url=endpoint_url, aws_access_key_id="mock", aws_secret_access_key="mock", region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"))  # nosec B106
 else:
     session = boto3.Session()
     s3_client = boto3.client("s3")
     dynamodb = boto3.resource("dynamodb")
+    secrets_client = boto3.client(
+        "secretsmanager",
+        region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"),
+    )
+
+RAW_BUCKET = os.environ.get("RAW_BUCKET")
+
+try:
+    MAX_OBJECT_BYTES = int(os.environ.get("MAX_OBJECT_BYTES", "104857600"))
+except ValueError:
+    logger.warning("Invalid MAX_OBJECT_BYTES value; falling back to 100 MiB.")
+    MAX_OBJECT_BYTES = 104857600
+
+
+def load_abuseipdb_key() -> str | None:
+    """Load the AbuseIPDB key from Secrets Manager; fail closed if unavailable."""
+    secret_arn = os.environ.get("ABUSEIPDB_SECRET_ARN")
+    if not secret_arn:
+        logger.info("ABUSEIPDB_SECRET_ARN not set; threat-intel enrichment disabled.")
+        return None
+
+    try:
+        response = secrets_client.get_secret_value(SecretId=secret_arn)
+    except Exception as exc:
+        logger.warning(f"Could not read AbuseIPDB secret; enrichment disabled: {exc}")
+        return None
+
+    payload = response.get("SecretString")
+    if not payload:
+        logger.warning("AbuseIPDB secret has no SecretString; enrichment disabled.")
+        return None
+
+    try:
+        parsed = json.loads(payload)
+    except (TypeError, ValueError):
+        return payload
+
+    if isinstance(parsed, dict):
+        key = parsed.get("api_key") or parsed.get("abuseipdb_api_key")
+        return str(key) if key else None
+    return str(parsed)
+
 
 # Initialize persistent DynamoDB clients
 state_store = DynamoDBStateStore()
-analyzer = StatefulSecurityAnalyzer(
-    state_store=state_store,
-    abuseipdb_key=os.environ.get("ABUSEIPDB_API_KEY") or None,
-)
+abuseipdb_key = load_abuseipdb_key()
+if abuseipdb_key:
+    logger.info("Loaded AbuseIPDB API key from Secrets Manager.")
+analyzer = StatefulSecurityAnalyzer(state_store=state_store, abuseipdb_key=abuseipdb_key)
 detections_table = dynamodb.Table("ot_detections")
 
 import hashlib
@@ -163,9 +208,29 @@ def lambda_handler(event, context):
                 continue
                 
             object_key = urllib.parse.unquote_plus(object_key)
+
+            if RAW_BUCKET and bucket_name != RAW_BUCKET:
+                logger.error(f"Refusing object from unexpected bucket {bucket_name}; expected {RAW_BUCKET}.")
+                record_failed = True
+                continue
+
+            try:
+                object_size = int(s3_data.get("object", {}).get("size", 0) or 0)
+            except (TypeError, ValueError):
+                object_size = 0
+
+            if object_size > MAX_OBJECT_BYTES:
+                logger.error(
+                    f"Object s3://{bucket_name}/{object_key} is {object_size} bytes, "
+                    f"above MAX_OBJECT_BYTES={MAX_OBJECT_BYTES}; leaving it for the ingest DLQ."
+                )
+                record_failed = True
+                continue
+
             logger.info(f"Processing file: s3://{bucket_name}/{object_key}")
             
-            temp_path = f"/tmp/{os.path.basename(object_key)}"
+            work_dir = tempfile.mkdtemp(prefix="ot-parser-")
+            temp_path = os.path.join(work_dir, os.path.basename(object_key))
             try:
                 s3_client.download_file(bucket_name, object_key, temp_path)
                 # Check if the downloaded file is gzipped (starts with gzip magic number 1f 8b)
@@ -182,6 +247,7 @@ def lambda_handler(event, context):
                     logger.info(f"Detected gzipped content. Renamed temp path to: {temp_path}")
             except Exception as e:
                 logger.error(f"Failed to download or check file s3://{bucket_name}/{object_key} to {temp_path}: {e}")
+                shutil.rmtree(work_dir, ignore_errors=True)
                 record_failed = True
                 continue
                 
@@ -250,7 +316,7 @@ def lambda_handler(event, context):
                                                 "event_timestamp": timestamp_str,
                                                 "severity": severity,
                                                 "host": row.get("hostname") or source or "unknown",
-                                                "src_ip": row.get("ip") or "unknown",
+                                                "src_ip": row.get("ip") or row.get("src_ip") or "unknown",
                                                 "alert_reason": alert_reason,
                                                 "details": alert.get("details", ""),
                                                 "original_key": object_key
@@ -317,6 +383,7 @@ def lambda_handler(event, context):
                     
             if os.path.exists(temp_path):
                 os.remove(temp_path)
+            shutil.rmtree(work_dir, ignore_errors=True)
 
         if record_failed and message_id:
             logger.warning(f"Marking SQS message {message_id} as failed for retry.")

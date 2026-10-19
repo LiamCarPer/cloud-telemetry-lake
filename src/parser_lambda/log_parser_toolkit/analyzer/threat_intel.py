@@ -47,7 +47,7 @@ class ThreatIntelCache:
         try:
             # Using urllib to avoid external dependencies like 'requests'
             req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=5) as response:
+            with urllib.request.urlopen(req, timeout=5) as response:  # nosec B310
                 data = json.loads(response.read().decode())
                 # Return the abuseConfidenceScore (0-100)
                 return data.get('data', {}).get('abuseConfidenceScore')

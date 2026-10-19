@@ -28,10 +28,27 @@ variable "force_destroy" {
   default     = true
 }
 
-variable "abuseipdb_api_key" {
+variable "log_retention_days" {
+  type        = number
+  description = "Retention period for Lambda CloudWatch log groups."
+  default     = 14
+}
+
+variable "ops_alert_email" {
   type        = string
-  description = "Optional AbuseIPDB API key. When set, the parser Lambda enriches public IPs with threat-intelligence scores; when empty, enrichment is skipped."
+  description = "Optional email address subscribed to the operations alarm topic. Leave empty to skip the subscription."
   default     = ""
-  sensitive   = true
+}
+
+variable "max_object_bytes" {
+  type        = number
+  description = "Maximum raw object size the parser will download. Larger objects are retried and then sent to the ingest DLQ."
+  default     = 104857600
+}
+
+variable "lambda_reserved_concurrency" {
+  type        = number
+  description = "Reserved concurrency for each Lambda function, capping blast radius and cost in the lab."
+  default     = 5
 }
 

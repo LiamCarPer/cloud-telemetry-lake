@@ -51,8 +51,8 @@ class DynamoDBStateStore(StateStore):
             self.dynamodb = boto3.resource(
                 "dynamodb",
                 endpoint_url=self.endpoint_url,
-                aws_access_key_id="mock",
-                aws_secret_access_key="mock",
+                aws_access_key_id="mock",  # nosec B106
+                aws_secret_access_key="mock",  # nosec B106
                 region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
             )
         else:

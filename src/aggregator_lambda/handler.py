@@ -46,8 +46,8 @@ elif not endpoint_url and os.environ.get("LOCALSTACK_HOSTNAME"):
 
 _client_kwargs = dict(
     endpoint_url=endpoint_url,
-    aws_access_key_id="mock",
-    aws_secret_access_key="mock",
+    aws_access_key_id="mock",  # nosec B106
+    aws_secret_access_key="mock",  # nosec B106
     region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"),
 )
 

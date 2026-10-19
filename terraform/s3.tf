@@ -22,7 +22,94 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "sse" {
 
   rule {
     apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = aws_kms_key.telemetry.arn
+    }
+    bucket_key_enabled = true
+  }
+}
+
+resource "aws_s3_bucket_versioning" "telemetry" {
+  for_each = aws_s3_bucket.telemetry_buckets
+  bucket   = each.value.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "raw" {
+  bucket = aws_s3_bucket.telemetry_buckets["raw"].id
+
+  rule {
+    id     = "raw-retention"
+    status = "Enabled"
+    filter {}
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+
+    expiration {
+      days = 90
+    }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "staged" {
+  bucket = aws_s3_bucket.telemetry_buckets["staged"].id
+
+  rule {
+    id     = "abort-incomplete-uploads"
+    status = "Enabled"
+    filter {}
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "reports" {
+  bucket = aws_s3_bucket.telemetry_buckets["reports"].id
+
+  rule {
+    id     = "athena-results-retention"
+    status = "Enabled"
+    filter {
+      prefix = "athena-results/"
+    }
+
+    expiration {
+      days = 30
+    }
+  }
+
+  rule {
+    id     = "abort-incomplete-uploads"
+    status = "Enabled"
+    filter {}
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "dlq" {
+  bucket = aws_s3_bucket.telemetry_buckets["dlq"].id
+
+  rule {
+    id     = "dlq-retention"
+    status = "Enabled"
+    filter {}
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+
+    expiration {
+      days = 90
     }
   }
 }

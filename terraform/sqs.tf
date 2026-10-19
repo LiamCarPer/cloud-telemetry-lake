@@ -1,13 +1,23 @@
 # Dead-letter queue for messages the parser cannot process after retries.
 # Transient failures are selectively retried via ReportBatchItemFailures.
 resource "aws_sqs_queue" "ingest_dlq" {
-  name = "ot-log-ingest-dlq"
+  name                              = "ot-log-ingest-dlq"
+  kms_master_key_id                 = aws_kms_key.telemetry.arn
+  kms_data_key_reuse_period_seconds = 300
+}
+
+resource "aws_sqs_queue" "aggregator_dlq" {
+  name                              = "ot-aggregator-dlq"
+  kms_master_key_id                 = aws_kms_key.telemetry.arn
+  kms_data_key_reuse_period_seconds = 300
 }
 
 resource "aws_sqs_queue" "ingest_queue" {
-  name                       = "ot-log-ingest-queue"
-  receive_wait_time_seconds  = 10
-  visibility_timeout_seconds = 360 # >= parser Lambda timeout (180s) plus margin
+  name                              = "ot-log-ingest-queue"
+  receive_wait_time_seconds         = 10
+  visibility_timeout_seconds        = 360 # >= parser Lambda timeout (180s) plus margin
+  kms_master_key_id                 = aws_kms_key.telemetry.arn
+  kms_data_key_reuse_period_seconds = 300
 
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.ingest_dlq.arn
@@ -31,6 +41,9 @@ resource "aws_sqs_queue_policy" "ingest_queue_policy" {
         Condition = {
           ArnEquals = {
             "aws:SourceArn" = aws_s3_bucket.telemetry_buckets["raw"].arn
+          }
+          StringEquals = {
+            "aws:SourceAccount" = local.account_id
           }
         }
       }

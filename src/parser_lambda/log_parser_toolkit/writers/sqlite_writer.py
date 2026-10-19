@@ -1,3 +1,4 @@
+import re
 import sqlite3
 from typing import Dict, Any, List
 from .base import BaseWriter
@@ -10,13 +11,15 @@ class SQLiteWriter(BaseWriter):
         
         # Sanitize field names for SQL
         self.sql_fields = [f.replace("-", "_").replace(" ", "_") for f in self.fields]
+        if not all(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", field) for field in self.sql_fields):
+            raise ValueError("Unsafe SQL identifier in writer fields")
         placeholders = ", ".join(["?" for _ in self.sql_fields])
         columns_def = ", ".join([f"{f} TEXT" for f in self.sql_fields])
         
         self.cursor.execute(f"DROP TABLE IF EXISTS logs")
         self.cursor.execute(f"CREATE TABLE logs ({columns_def})")
         
-        self.insert_sql = f"INSERT INTO logs ({', '.join(self.sql_fields)}) VALUES ({placeholders})"
+        self.insert_sql = f"INSERT INTO logs ({', '.join(self.sql_fields)}) VALUES ({placeholders})"  # nosec B608
         self.batch = []
 
     def write_row(self, row: Dict[str, Any]):

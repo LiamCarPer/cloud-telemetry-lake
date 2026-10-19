@@ -43,6 +43,15 @@ resource "aws_dynamodb_table" "ot_detections" {
     projection_type = "ALL"
   }
 
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.telemetry.arn
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
   tags = {
     Environment = var.environment
     Project     = "ot-telemetry"
@@ -62,6 +71,15 @@ resource "aws_dynamodb_table" "ot_detection_state" {
   ttl {
     attribute_name = "ttl"
     enabled        = true
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.telemetry.arn
+  }
+
+  point_in_time_recovery {
+    enabled = true
   }
 
   tags = {

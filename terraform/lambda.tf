@@ -26,15 +26,16 @@ resource "aws_lambda_layer_version" "pandas_layer" {
 }
 
 resource "aws_lambda_function" "parser_lambda" {
-  s3_bucket        = aws_s3_bucket.telemetry_buckets["raw"].id
-  s3_key           = aws_s3_object.lambda_zip_upload.key
-  function_name    = "ot-log-parser-lambda"
-  role             = aws_iam_role.lambda_exec.arn
-  handler          = "handler.lambda_handler"
-  runtime          = "python3.12"
-  timeout          = 180
-  memory_size      = 512
-  source_code_hash = data.archive_file.lambda_zip.output_base64sha256
+  s3_bucket                      = aws_s3_bucket.telemetry_buckets["raw"].id
+  s3_key                         = aws_s3_object.lambda_zip_upload.key
+  function_name                  = "ot-log-parser-lambda"
+  role                           = aws_iam_role.lambda_exec.arn
+  handler                        = "handler.lambda_handler"
+  runtime                        = "python3.12"
+  timeout                        = 180
+  memory_size                    = 512
+  reserved_concurrent_executions = var.lambda_reserved_concurrency
+  source_code_hash               = data.archive_file.lambda_zip.output_base64sha256
 
   # NOTE: LocalStack Community Edition workaround.
   # If deploying to real AWS, uncomment the layers block below and exclude dependencies from the zip.
@@ -44,13 +45,18 @@ resource "aws_lambda_function" "parser_lambda" {
 
   environment {
     variables = {
-      RAW_BUCKET        = aws_s3_bucket.telemetry_buckets["raw"].id
-      STAGED_BUCKET     = aws_s3_bucket.telemetry_buckets["staged"].id
-      DLQ_BUCKET        = aws_s3_bucket.telemetry_buckets["dlq"].id
-      AWS_ENDPOINT_URL  = var.localstack_endpoint
-      ABUSEIPDB_API_KEY = var.abuseipdb_api_key
+      RAW_BUCKET           = aws_s3_bucket.telemetry_buckets["raw"].id
+      STAGED_BUCKET        = aws_s3_bucket.telemetry_buckets["staged"].id
+      DLQ_BUCKET           = aws_s3_bucket.telemetry_buckets["dlq"].id
+      AWS_ENDPOINT_URL     = var.localstack_endpoint
+      ABUSEIPDB_SECRET_ARN = aws_secretsmanager_secret.abuseipdb.arn
+      MAX_OBJECT_BYTES     = tostring(var.max_object_bytes)
     }
   }
+
+  kms_key_arn = aws_kms_key.telemetry.arn
+
+  depends_on = [aws_cloudwatch_log_group.parser]
 }
 
 resource "aws_lambda_event_source_mapping" "sqs_trigger" {

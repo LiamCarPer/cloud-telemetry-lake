@@ -104,11 +104,10 @@ class StatefulSecurityAnalyzer:
                         asn_response = self.geoip_reader.asn(ip)
                         log['asn'] = asn_response.autonomous_system_number
                         log['isp'] = asn_response.autonomous_system_organization
-                    except:
-                        pass
+                    except Exception:
+                        logger.debug("GeoIP ASN lookup failed for %s", ip)
                 except Exception:
-                    # Ignore lookup failures for internal/unmapped IPs
-                    pass
+                    logger.debug("GeoIP city lookup failed for %s", ip)
 
         # 3. Consolidate alerts for flat output formats (CSV/SQLite)
         if log["alerts"]:

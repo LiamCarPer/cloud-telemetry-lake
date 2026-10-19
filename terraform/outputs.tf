@@ -52,3 +52,33 @@ output "incident_notifications_queue_url" {
   value       = aws_sqs_queue.incident_notifications.id
   description = "The URL of the SQS queue subscribed to the SNS incident alerts topic (for LocalStack verification)."
 }
+
+output "kms_key_alias" {
+  value       = aws_kms_alias.telemetry.name
+  description = "Alias of the customer-managed KMS key used for telemetry data, logs and secrets."
+}
+
+output "abuseipdb_secret_arn" {
+  value       = aws_secretsmanager_secret.abuseipdb.arn
+  description = "ARN of the Secrets Manager secret holding the AbuseIPDB API key (value is set out of band)."
+}
+
+output "ops_alerts_topic_arn" {
+  value       = aws_sns_topic.ops_alerts.arn
+  description = "ARN of the SNS topic receiving operational CloudWatch alarms."
+}
+
+output "ops_alerts_sink_url" {
+  value       = aws_sqs_queue.ops_alerts_sink.id
+  description = "URL of the SQS queue subscribed to the operations alarm topic (for LocalStack verification)."
+}
+
+output "parser_log_group" {
+  value       = aws_cloudwatch_log_group.parser.name
+  description = "CloudWatch log group for the parser Lambda."
+}
+
+output "aggregator_log_group" {
+  value       = aws_cloudwatch_log_group.aggregator.name
+  description = "CloudWatch log group for the incident aggregator Lambda."
+}
