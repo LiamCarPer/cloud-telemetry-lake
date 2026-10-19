@@ -65,7 +65,11 @@ class TestHandlerLogic(unittest.TestCase):
         self.assertNotEqual(id1, id3)
         self.assertEqual(len(id1), 16)
 
-@patch.dict(os.environ, {"STAGED_BUCKET": "ot-telemetry-staged-test", "DLQ_BUCKET": "ot-telemetry-dlq-test"})
+@patch.dict(os.environ, {
+    "RAW_BUCKET": "raw",
+    "STAGED_BUCKET": "ot-telemetry-staged-test",
+    "DLQ_BUCKET": "ot-telemetry-dlq-test",
+})
 class TestHandlerBatchFailures(unittest.TestCase):
     """SQS partial batch response behaviour (ReportBatchItemFailures)."""
 
@@ -116,6 +120,66 @@ class TestHandlerBatchFailures(unittest.TestCase):
         with patch.object(handler.s3_client, "download_file", side_effect=fake_download):
             result = handler.lambda_handler(self._sqs_event(body, "msg-ok"), None)
         self.assertEqual(result["batchItemFailures"], [])
+
+    def test_unexpected_bucket_is_reported_as_failure(self):
+        body = json.dumps({
+            "Records": [{
+                "s3": {
+                    "bucket": {"name": "some-other-bucket"},
+                    "object": {"key": "source=syslog/date=2026-05-20/events.log", "size": 10},
+                }
+            }]
+        })
+        result = handler.lambda_handler(self._sqs_event(body, "msg-wrong-bucket"), None)
+        self.assertEqual(result["batchItemFailures"], [{"itemIdentifier": "msg-wrong-bucket"}])
+
+    def test_oversized_object_is_reported_as_failure(self):
+        body = json.dumps({
+            "Records": [{
+                "s3": {
+                    "bucket": {"name": "raw"},
+                    "object": {
+                        "key": "source=syslog/date=2026-05-20/huge.log",
+                        "size": handler.MAX_OBJECT_BYTES + 1,
+                    },
+                }
+            }]
+        })
+        result = handler.lambda_handler(self._sqs_event(body, "msg-too-large"), None)
+        self.assertEqual(result["batchItemFailures"], [{"itemIdentifier": "msg-too-large"}])
+
+
+class TestAbuseIpdbSecret(unittest.TestCase):
+    def test_loads_json_secret(self):
+        with patch.dict(os.environ, {"ABUSEIPDB_SECRET_ARN": "arn:aws:secretsmanager:test"}):
+            with patch.object(
+                handler.secrets_client,
+                "get_secret_value",
+                return_value={"SecretString": '{"api_key": "secret-key"}'},
+            ):
+                self.assertEqual(handler.load_abuseipdb_key(), "secret-key")
+
+    def test_loads_plain_string_secret(self):
+        with patch.dict(os.environ, {"ABUSEIPDB_SECRET_ARN": "arn:aws:secretsmanager:test"}):
+            with patch.object(
+                handler.secrets_client,
+                "get_secret_value",
+                return_value={"SecretString": "plain-secret-key"},
+            ):
+                self.assertEqual(handler.load_abuseipdb_key(), "plain-secret-key")
+
+    def test_missing_arn_fails_closed(self):
+        with patch.dict(os.environ, {"ABUSEIPDB_SECRET_ARN": ""}):
+            self.assertIsNone(handler.load_abuseipdb_key())
+
+    def test_read_error_fails_closed(self):
+        with patch.dict(os.environ, {"ABUSEIPDB_SECRET_ARN": "arn:aws:secretsmanager:test"}):
+            with patch.object(
+                handler.secrets_client,
+                "get_secret_value",
+                side_effect=RuntimeError("access denied"),
+            ):
+                self.assertIsNone(handler.load_abuseipdb_key())
 
 
 if __name__ == "__main__":

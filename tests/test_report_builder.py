@@ -126,5 +126,25 @@ class TestReportBuilder(unittest.TestCase):
         self.assertIsNone(first["window_start"])
         self.assertIsNone(first["window_end"])
 
+    def test_parser_rule_reasons_map_to_ics_techniques(self):
+        report = build_report([
+            {
+                "alert_reason": "OT Modbus Write Command",
+                "severity": "MEDIUM",
+                "host": "ot-gateway",
+                "src_ip": "172.24.0.10",
+            },
+            {
+                "alert_reason": "OT Siemens S7comm PLC State Change",
+                "severity": "HIGH",
+                "host": "ot-gateway",
+                "src_ip": "172.24.0.10",
+            },
+        ])
+
+        self.assertIn("T0831", report["mitre_techniques"])
+        self.assertIn("T0813", report["mitre_techniques"])
+        self.assertEqual(report["severity"], "HIGH")
+
 if __name__ == "__main__":
     unittest.main()
