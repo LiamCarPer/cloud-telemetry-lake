@@ -118,8 +118,9 @@ The stack was applied and exercised against LocalStack 4.14.0: parser detections
 ### 2. Deploy Infrastructure
 
 ```bash
-# Start LocalStack Community
-docker run -d --name localstack -p 4566:4566 localstack/localstack
+# Start LocalStack Community. 4.14.0 is pinned because the 2026 `latest`
+# image requires a license token; this is the version the stack was verified on.
+docker run -d --name localstack -p 4566:4566 localstack/localstack:4.14.0
 
 # Deploy all AWS resources via Terraform
 cd terraform
