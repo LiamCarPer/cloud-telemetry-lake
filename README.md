@@ -58,6 +58,7 @@ graph TD
 *   **Stateful Security Correlation:** Detection records written to DynamoDB with GSIs for severity and host-based querying.
 *   **Automated Incident Response:** DynamoDB Streams trigger the aggregator Lambda to produce NIST SP 800-61 IR reports, grouped into deterministic `INCIDENT_WINDOW_SECONDS` windows so a retried stream batch regenerates the same report, and publish SOC alerts via SNS.
 *   **Analytical Storage:** Parsed logs staged as snappy-compressed Apache Parquet, partitioned by source and date.
+*   **Security-Hardened Delivery:** CMK encryption for data, logs and secrets; Secrets Manager for the threat-intel key; scoped IAM with a permissions boundary; CloudWatch alarms on pipeline failure paths; and CI supply-chain scanning (gitleaks, Checkov, Bandit, pip-audit).
 
 ---
 
@@ -80,6 +81,29 @@ All three workarounds are reversible: the Terraform variables `localstack_endpoi
 *   **Idempotent detections:** every detection row carries a deterministic 16-character SHA-256 event ID inside its sort key (`timestamp#event_hash`), so an SQS retry overwrites the same DynamoDB item instead of duplicating it.
 *   **Idempotent incident reports:** the aggregator derives a UUIDv5 incident ID from the incident window and the sorted detection identities; a retried DynamoDB Streams batch rewrites the same `incidents/<id>.json` object.
 *   **Unparseable records:** individual lines that fail parsing are written to the DLQ bucket under `unparseable/date=<date>/source=<source>/`, preserving the original error for review.
+
+---
+
+## Security Controls
+
+| Area | Implementation |
+| :--- | :--- |
+| **IAM** | Per-function roles with scoped ARNs and a permissions boundary; log permissions scoped to each function's log group; no `dynamodb:Scan`/`DeleteItem`; queue policies pin `aws:SourceArn` and `aws:SourceAccount`. |
+| **Secrets** | The AbuseIPDB key lives in Secrets Manager behind a customer-managed KMS key. Terraform creates the secret container only, so the value never enters git or Terraform state. `make seed-secret` stores it locally. |
+| **Encryption** | SSE-KMS on S3, SQS and DynamoDB; CMK-encrypted CloudWatch Logs, Secrets Manager and Lambda environment variables; TLS-only S3 bucket policy and public-access blocks. |
+| **Monitoring** | CloudWatch alarms for Lambda errors/throttles, ingest queue age and DLQ depth, routed to the `ot-ops-alerts` topic (set `ops_alert_email` to receive mail). |
+| **Pipeline** | GitHub Actions pinned to commit SHAs, read-only token permissions, gitleaks secret scanning, Checkov for Terraform, Bandit for Python, pip-audit for dependencies, Dependabot and dependency review. |
+
+Control details, the threat model and residual risks are in [`docs/SECURITY.md`](docs/SECURITY.md); the disclosure policy is [`SECURITY.md`](SECURITY.md).
+
+```bash
+make test          # includes security-invariant regression tests
+make security      # bandit + pip-audit + checkov
+ABUSEIPDB_API_KEY=... make seed-secret
+make alarm-test    # proves a CloudWatch alarm reaches the ops SNS topic
+```
+
+The stack was applied and exercised against LocalStack 4.14.0: parser detections, Parquet staging, deterministic incident reports, SNS→SQS delivery, cold-start secret resolution, and a CloudWatch alarm transition delivered to the operations sink queue.
 
 ---
 
@@ -203,12 +227,19 @@ host_identifier  log_count
 
 ## Known Limitations
 
-*   **Lab-scale, not production-scale.** The PRD (`docs/specs.md`) records target metrics (ingest latency, P95 detection latency, Lambda success rate). They are **not measured yet**: there is no load test, and no CloudWatch alarms are configured.
+*   **Lab-scale, not production-scale.** The PRD (`docs/specs.md`) records target metrics (ingest latency, P95 detection latency, Lambda success rate). They are **not measured yet**: there is no load test or baseline, even though alarms now cover the failure paths.
 *   **Incident grouping is per DynamoDB Streams batch, anchored to a time window.** Detections arriving in separate batches are not merged into a single incident, and there is no cross-batch correlation state.
 *   **Glue and Athena resources are declarative.** They are disabled by default (`enable_analytics = false`) because LocalStack Community does not implement those APIs; the DDL and named queries are validated by Terraform, not executed against real AWS.
-*   **Threat-intel enrichment is optional.** AbuseIPDB enrichment is active only when `ABUSEIPDB_API_KEY` is set. GeoIP enrichment exists in the analyzer but is not wired into the Lambda deployment.
-*   **Objects are staged to `/tmp` before parsing.** The Lambda downloads each object to `/tmp` and then parses it line-by-line from disk rather than streaming directly from S3.
+*   **Threat-intel enrichment is optional.** AbuseIPDB enrichment is active only when the Secrets Manager secret has a value (`make seed-secret`). GeoIP enrichment exists in the analyzer but is not wired into the Lambda deployment.
+*   **Objects are staged under `/tmp` before parsing.** The Lambda downloads each object to a per-object temporary directory and then parses it line-by-line from disk rather than streaming directly from S3.
 *   **Staged Parquet is at-least-once under retries.** Detection writes and incident reports are idempotent, but a retried SQS message can re-append its batch as new Parquet files, so the staged dataset may contain duplicate rows after a partial failure. Deduplication is left to the query layer.
+*   **IAM enforcement is not exercised locally.** LocalStack Community does not evaluate IAM policies. The policies are reviewed, linted and unit-guarded, but their enforcement must be verified in a real AWS account.
+*   **Cloud security services are out of scope.** No CloudTrail, GuardDuty, Security Hub, AWS Config, IAM Access Analyzer, SCPs or VPC endpoints. [`docs/SECURITY.md`](docs/SECURITY.md) records them as the production baseline rather than claiming them.
+*   **Secret rotation is manual.** The key is read at cold start and cached; rotating it requires a new secret version and a forced cold start. There is no rotation Lambda.
+*   **One CMK covers data, logs and secrets.** This keeps key-policy review simple in the lab; production should split keys by data classification.
+*   **LocalStack does not report DynamoDB PITR status.** PITR is configured in Terraform, but LocalStack's `describe-table` omits the recovery description and does not exercise restore.
+*   **Unparseable-line batches in the S3 DLQ are not alarmed directly.** SQS DLQ depth is alarmed; S3 DLQ review is manual.
+*   **There is no automated deployment.** CI validates but holds no AWS credentials; Terraform is applied manually. An OIDC deploy role is a documented next step, not an implemented one.
 *   **Unit coverage, not integration coverage.** The deployed pipeline is verified manually with the AWS CLI commands below; it is not exercised by an automated end-to-end test.
 
 ---

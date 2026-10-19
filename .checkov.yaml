@@ -1,0 +1,23 @@
+# Checkov configuration.
+#
+# Every skip below is an accepted lab risk or a checkov annotation limitation,
+# not a silently ignored finding. Production hardening items are recorded in
+# docs/SECURITY.md.
+
+skip-check:
+  # Annotation limitations: these controls are configured in separate
+  # resources, which the checks do not link back to the bucket resource.
+  - CKV_AWS_21  # versioning -> aws_s3_bucket_versioning
+  - CKV_AWS_145 # SSE-KMS -> aws_s3_bucket_server_side_encryption_configuration
+  - CKV2_AWS_6  # public access block -> aws_s3_bucket_public_access_block
+
+  # Accepted lab-scope risks.
+  - CKV_AWS_18  # S3 access logging: production uses CloudTrail data events
+  - CKV_AWS_144 # cross-region replication: single-region lab
+  - CKV_AWS_117 # Lambda outside a VPC: LocalStack lab; production uses endpoints
+  - CKV_AWS_272 # Lambda code signing not implemented
+  - CKV_AWS_50  # X-Ray tracing not enabled
+  - CKV_AWS_338 # 14-day log retention is deliberate for lab cost
+  - CKV2_AWS_57 # secret rotation is a documented runbook, not a rotation Lambda
+  - CKV2_AWS_62 # only the raw bucket needs ObjectCreated notifications
+  - CKV_AWS_116 # parser failures use SQS redrive; aggregator has an ESM DLQ destination

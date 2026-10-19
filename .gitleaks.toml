@@ -1,0 +1,13 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "LocalStack mock credentials and documentation examples"
+paths = [
+  '''README\.md''',
+  '''docs/specs\.md''',
+]
+regexes = [
+  '''(?i)aws_access_key_id\s*=\s*["']?mock''',
+  '''(?i)aws_secret_access_key\s*=\s*["']?mock''',
+]
