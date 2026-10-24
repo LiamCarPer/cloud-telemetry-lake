@@ -73,10 +73,16 @@ class DynamoDBStateStore(StateStore):
         ttl_value = int(current_bucket + window_seconds + 300) # 5-minute safety margin
         
         try:
-            # Atomically increment the count for the current bucket
+            # Atomically increment the count for the current bucket.
+            # Attribute names are aliased because `ttl` is a DynamoDB reserved
+            # keyword (an unaliased SET ttl fails with ValidationException).
             self.table.update_item(
                 Key={"state_key": current_key},
-                UpdateExpression="ADD hit_count :inc SET ttl = :ttl",
+                UpdateExpression="ADD #hits :inc SET #ttl = :ttl",
+                ExpressionAttributeNames={
+                    "#hits": "hit_count",
+                    "#ttl": "ttl",
+                },
                 ExpressionAttributeValues={
                     ":inc": 1,
                     ":ttl": ttl_value
