@@ -39,7 +39,51 @@ RECOMMENDED_ACTIONS: Dict[str, List[str]] = {
         "Perform a safety integrity level (SIL) review of the affected process.",
         "Notify the plant safety officer and initiate emergency response procedures.",
     ],
+    # Identity / cloud control plane
+    "IDENTITY_ROOT_ACCOUNT_USAGE": [
+        "Rotate the root credentials and confirm MFA is enabled on the root account.",
+        "Review every action performed by the root principal in the last 24 hours.",
+        "Check for new access keys, users, roles or trust-policy changes.",
+        "Escalate to the account incident process; root use should be exceptional.",
+    ],
+    "IDENTITY_CONSOLE_LOGIN_WITHOUT_MFA": [
+        "Confirm whether the login was expected and whether MFA is enforced for the principal.",
+        "Revoke the session and reset the credential if the login is not recognised.",
+        "Enforce an MFA-required policy for console access.",
+    ],
+    "IDENTITY_ACCESS_KEY_CREATED": [
+        "Confirm the key creation was authorised and tied to a documented request.",
+        "Identify and disable any key that was not expected; rotate the principal's credentials.",
+        "Review the new key's activity in CloudTrail and restrict its permissions.",
+    ],
+    "IDENTITY_IAM_POLICY_MODIFIED": [
+        "Compare the policy change with the approved change record.",
+        "Revert unexpected privilege grants and review the actor's recent activity.",
+        "Check for new principals, trust relationships or persistence mechanisms.",
+    ],
+    "IDENTITY_CLOUDTRAIL_TAMPERING": [
+        "Restore CloudTrail logging immediately if it was stopped or modified.",
+        "Preserve existing log files and validate their integrity.",
+        "Investigate the actor and source IP; treat this as a defense-evasion event.",
+    ],
+    "IDENTITY_GUARDDUTY_TAMPERING": [
+        "Re-enable GuardDuty and confirm the detector is healthy.",
+        "Investigate who changed the detector and what else they touched.",
+        "Review findings that may have been suppressed during the gap.",
+    ],
+    "IDENTITY_CONSOLE_LOGIN_BRUTE_FORCE": [
+        "Block or rate-limit the source address and confirm the targeted accounts.",
+        "Check whether any attempt succeeded and reset credentials if needed.",
+        "Enable account lockout or adaptive authentication for console access.",
+    ],
 }
+
+GUARDDUTY_ACTIONS: List[str] = [
+    "Triage the GuardDuty finding and confirm the affected principal and resource.",
+    "Rotate or disable the affected access keys and revoke active sessions.",
+    "Review CloudTrail for the same principal and source IP in the preceding 24 hours.",
+    "Escalate to the account incident process if the finding indicates active compromise.",
+]
 
 MITRE_MAP: Dict[str, str] = {
     "CROSS_ZONE_VIOLATION": "T0886",
@@ -89,12 +133,16 @@ def build_report(detections: List[Dict[str, Any]], window_seconds: int = DEFAULT
     # Escalate severity to the highest observed across all detections
     highest_severity = _resolve_highest_severity(detections)
 
-    # Collect MITRE ATT&CK for ICS techniques (deduplicated, ordered, valid only)
-    mitre_techniques = sorted({
-        MITRE_MAP[det.get("alert_reason", "")]
-        for det in detections
-        if det.get("alert_reason") and det.get("alert_reason") in MITRE_MAP
+    # Collect MITRE ATT&CK techniques by framework (deduplicated, ordered)
+    mitre_by_framework = _collect_mitre(detections)
+    mitre_techniques = sorted(set(mitre_by_framework["ics"]) | set(mitre_by_framework["enterprise"]))
+    mitre_tactics = sorted({
+        det.get("mitre_tactic") for det in detections if det.get("mitre_tactic")
     })
+
+    detection_domains = sorted({det.get("detection_domain", "ot") for det in detections})
+    identity_count = sum(1 for det in detections if det.get("detection_domain") == "identity")
+    ot_count = len(detections) - identity_count
 
     # Collect affected assets
     hosts = sorted({
@@ -122,7 +170,12 @@ def build_report(detections: List[Dict[str, Any]], window_seconds: int = DEFAULT
         "nist_phase": "Detection & Analysis",
         "severity": highest_severity,
         "detection_count": len(detections),
+        "detection_domains": detection_domains,
+        "ot_detection_count": ot_count,
+        "identity_detection_count": identity_count,
         "mitre_techniques": mitre_techniques,
+        "mitre_techniques_by_framework": mitre_by_framework,
+        "mitre_tactics": mitre_tactics,
         "affected_assets": {
             "hosts": hosts,
             "source_ips": source_ips,
@@ -162,15 +215,23 @@ def _detection_identity(det: Dict[str, Any]) -> str:
 
 
 def _resolve_window(detections: List[Dict[str, Any]], window_seconds: int):
-    """Anchor the incident to the fixed window containing the earliest event."""
+    """Anchor the incident to the window containing the earliest event.
+
+    The end of the window is the configured width or the latest observed event,
+    whichever is later, so a multi-minute stream batch never reports an end time
+    that excludes its own detections.
+    """
     event_times = [t for t in (_event_time(d) for d in detections) if t is not None]
     if not event_times:
         return None, None
 
-    anchor_epoch = min(event_times).timestamp()
+    earliest = min(event_times)
+    latest = max(event_times)
+    anchor_epoch = earliest.timestamp()
     window_start_epoch = int(anchor_epoch // window_seconds) * window_seconds
     window_start = datetime.fromtimestamp(window_start_epoch, tz=timezone.utc)
-    return window_start, window_start + timedelta(seconds=window_seconds)
+    window_end = max(window_start + timedelta(seconds=window_seconds), latest)
+    return window_start, window_end
 
 
 def _derive_incident_id(detections: List[Dict[str, Any]], window_start: Optional[datetime]) -> str:
@@ -178,6 +239,21 @@ def _derive_incident_id(detections: List[Dict[str, Any]], window_start: Optional
     anchor = window_start.isoformat() if window_start else "no-window"
     identities = "|".join(sorted(_detection_identity(d) for d in detections))
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"ot-incident:{anchor}:{identities}"))
+
+
+def _collect_mitre(detections: List[Dict[str, Any]]) -> Dict[str, List[str]]:
+    """Collect ATT&CK techniques separately for ICS and Enterprise workloads."""
+    by_framework = {"ics": set(), "enterprise": set()}
+    for det in detections:
+        technique = det.get("mitre_technique") or MITRE_MAP.get(det.get("alert_reason", ""))
+        if not technique:
+            continue
+        framework = det.get("mitre_framework")
+        if not framework:
+            framework = "enterprise" if det.get("detection_domain") == "identity" else "ics"
+        bucket = "enterprise" if str(framework).lower() in ("enterprise", "identity") else "ics"
+        by_framework[bucket].add(str(technique))
+    return {key: sorted(values) for key, values in by_framework.items()}
 
 
 def _resolve_highest_severity(detections: List[Dict[str, Any]]) -> str:
@@ -192,9 +268,13 @@ def _resolve_highest_severity(detections: List[Dict[str, Any]]) -> str:
 def _build_recommended_actions(detections: List[Dict[str, Any]]) -> List[str]:
     actions: List[str] = []
     seen_types: set = set()
+    guardduty_seen = False
     for det in detections:
         alert_type = det.get("alert_reason", "")
         if alert_type and alert_type not in seen_types:
             seen_types.add(alert_type)
             actions.extend(RECOMMENDED_ACTIONS.get(alert_type, []))
+            if alert_type.startswith("GUARDDUTY_") and not guardduty_seen:
+                guardduty_seen = True
+                actions.extend(GUARDDUTY_ACTIONS)
     return actions

@@ -4,6 +4,7 @@ from .linux import LinuxSyslogParser
 from .web import WebLogParser
 from .windows import WindowsLogParser
 from .json import JsonLinesParser
+from .cloudtrail import CloudTrailParser
 
 def get_available_parsers():
     """

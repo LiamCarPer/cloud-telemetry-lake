@@ -42,7 +42,10 @@ def main():
         "timestamp", "hostname", "process", "pid", "message", "ip", "raw_line", "error",
         "alert_type", "source_ip", "dest_ip", "mitre_id", "description", "flow_id",
         "host", "environment", "event_type", "src_ip", "src_port", "dest_port",
-        "proto", "in_iface", "alert", "flow", "date", "source"
+        "proto", "in_iface", "alert", "flow", "date", "source",
+        "detection_domain", "event_name", "event_source", "user_arn", "user_name",
+        "user_type", "source_ip", "mfa_used", "error_code", "account_id",
+        "guardduty_type", "guardduty_severity", "mitre_tactic", "alert_reason", "details"
     ]
     for col in expected_cols:
         if col not in df.columns:
@@ -112,6 +115,58 @@ def main():
             print("Malcolm alerts did not contain alert details field.")
     else:
         print("No Malcolm NDR telemetry found.")
-        
+    print()
+
+    # Query 4: Identity IAM changes (CloudTrail)
+    print("=== QUERY 4: Identity IAM Changes (CloudTrail) ===")
+    cloudtrail = df[df["source"] == "cloudtrail"] if "source" in df.columns else pd.DataFrame()
+    iam_changes = cloudtrail[cloudtrail["event_source"] == "iam.amazonaws.com"] if not cloudtrail.empty else pd.DataFrame()
+    if not iam_changes.empty:
+        summary = (
+            iam_changes.groupby(["date", "event_name", "user_name", "source_ip"])
+            .size()
+            .reset_index(name="changes")
+            .sort_values("changes", ascending=False)
+        )
+        print(summary.to_string(index=False))
+    else:
+        print("No CloudTrail IAM changes found.")
+    print()
+
+    # Query 5: GuardDuty findings by type and severity
+    print("=== QUERY 5: GuardDuty Identity Findings ===")
+    guardduty = df[df["source"] == "guardduty"] if "source" in df.columns else pd.DataFrame()
+    if not guardduty.empty:
+        summary = (
+            guardduty.groupby(["date", "guardduty_type", "guardduty_severity"])
+            .size()
+            .reset_index(name="findings")
+            .sort_values("findings", ascending=False)
+        )
+        print(summary.to_string(index=False))
+    else:
+        print("No GuardDuty findings found.")
+    print()
+
+    # Query 6: CloudTrail source IPs that also appear in OT detections
+    print("=== QUERY 6: Identity/OT Source-IP Overlap ===")
+    ot_sources = df[df["source"].isin(["ot_sensor", "iptables"])] if "source" in df.columns else pd.DataFrame()
+    if not cloudtrail.empty and not ot_sources.empty:
+        cloud_ips = cloudtrail[["date", "user_name", "source_ip"]].dropna(subset=["source_ip"])
+        ot_ips = ot_sources[["src_ip", "alert_reason"]].dropna(subset=["src_ip"])
+        overlap = cloud_ips.merge(ot_ips, left_on="source_ip", right_on="src_ip", how="inner")
+        if not overlap.empty:
+            summary = (
+                overlap.groupby(["date", "user_name", "source_ip", "alert_reason"])
+                .size()
+                .reset_index(name="events")
+                .sort_values("events", ascending=False)
+            )
+            print(summary.to_string(index=False))
+        else:
+            print("No identity/OT source-IP overlap found.")
+    else:
+        print("Both CloudTrail and OT telemetry are required for this query.")
+
 if __name__ == "__main__":
     main()

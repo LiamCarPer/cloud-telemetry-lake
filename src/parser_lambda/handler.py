@@ -21,6 +21,8 @@ from log_parser_toolkit.parsers import get_parser
 from log_parser_toolkit.api import parse_stream
 from log_parser_toolkit.analyzer.state_store import DynamoDBStateStore
 from log_parser_toolkit.analyzer.middleware import StatefulSecurityAnalyzer
+from log_parser_toolkit.analyzer.severity import get_severity
+from log_parser_toolkit.detections import generate_event_id, normalize_for_parquet
 
 # Set up logging
 logger = logging.getLogger()
@@ -103,27 +105,6 @@ if abuseipdb_key:
 analyzer = StatefulSecurityAnalyzer(state_store=state_store, abuseipdb_key=abuseipdb_key)
 detections_table = dynamodb.Table("ot_detections")
 
-import hashlib
-
-# Declarative Severity Registry mapping alert reasons to severity levels
-SEVERITY_MAPPING = {
-    # High Severity
-    "SSH Brute Force": "HIGH",
-    "Windows Brute Force": "HIGH",
-    "OT Siemens S7comm PLC State Change": "HIGH",
-    "Known Malicious IP": "HIGH",
-    "CROSS_ZONE_VIOLATION": "HIGH",
-    "OT_BRUTE_FORCE_SCAN": "HIGH",
-    # Medium Severity
-    "Privilege Escalation": "MEDIUM",
-    "OT Modbus Write Command": "MEDIUM",
-    "UNAUTHORIZED_MODBUS_WRITE": "MEDIUM",
-    "Web Directory Scanning": "MEDIUM"
-}
-
-def get_severity(alert_reason: str) -> str:
-    """Resolves alert severity dynamically from the registry with standard fallback."""
-    return SEVERITY_MAPPING.get(alert_reason, "LOW")
 
 def extract_partition_metadata(object_key: str) -> tuple:
     """
@@ -156,16 +137,6 @@ def extract_partition_metadata(object_key: str) -> tuple:
                 source = parts[0]
                 
     return source, date_str
-
-def generate_event_id(original_key: str, timestamp: str, alert_reason: str, index: int) -> str:
-    """
-    Generates a deterministic 16-character SHA-256 hash representing a unique alert.
-    Ensures SQS retries are idempotent (overwrites) and simultaneous events do not clash.
-    """
-    hasher = hashlib.sha256()
-    raw_payload = f"{original_key}:{timestamp}:{alert_reason}:{index}"
-    hasher.update(raw_payload.encode("utf-8"))
-    return hasher.hexdigest()[:16]
 
 def lambda_handler(event, context):
     logger.info(f"Received event: {json.dumps(event)}")
@@ -319,7 +290,8 @@ def lambda_handler(event, context):
                                                 "src_ip": row.get("ip") or row.get("src_ip") or "unknown",
                                                 "alert_reason": alert_reason,
                                                 "details": alert.get("details", ""),
-                                                "original_key": object_key
+                                                "original_key": object_key,
+                                                "detection_domain": "ot",
                                             }
                                         )
                                         logger.info(f"Recorded alert in DynamoDB: {correlator} (Sort Key: {range_key_timestamp})")
@@ -327,10 +299,6 @@ def lambda_handler(event, context):
                                         logger.error(f"Failed to write detection record to DynamoDB: {db_err}")
                                         record_failed = True
                             
-                            # Flatten complex structures to prevent Parquet schema mismatch
-                            for k, v in list(row.items()):
-                                if isinstance(v, (dict, list)):
-                                    row[k] = json.dumps(v)
                             valid_records.append(row)
             except Exception as e:
                 logger.error(f"Parser execution failed for file {object_key}: {e}")
@@ -359,6 +327,7 @@ def lambda_handler(event, context):
                     record_failed = True
                     
             if valid_records:
+                valid_records = normalize_for_parquet(valid_records)
                 logger.info(f"Found {len(valid_records)} valid records. Writing to staged bucket.")
                 try:
                     df = pd.DataFrame(valid_records)
