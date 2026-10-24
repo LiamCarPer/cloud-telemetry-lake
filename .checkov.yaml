@@ -21,3 +21,4 @@ skip-check:
   - CKV2_AWS_57 # secret rotation is a documented runbook, not a rotation Lambda
   - CKV2_AWS_62 # only the raw bucket needs ObjectCreated notifications
   - CKV_AWS_116 # parser failures use SQS redrive; aggregator has an ESM DLQ destination
+  - CKV2_AWS_3  # one lab account; no AWS Organizations / delegated GuardDuty admin

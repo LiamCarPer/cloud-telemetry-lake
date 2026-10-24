@@ -32,6 +32,9 @@ provider "aws" {
       kms            = var.localstack_endpoint
       secretsmanager = var.localstack_endpoint
       cloudwatch     = var.localstack_endpoint
+      events         = var.localstack_endpoint
+      cloudtrail     = var.localstack_endpoint
+      guardduty      = var.localstack_endpoint
     }
   }
 }

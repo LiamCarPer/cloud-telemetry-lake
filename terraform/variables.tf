@@ -52,3 +52,15 @@ variable "lambda_reserved_concurrency" {
   default     = 5
 }
 
+variable "enable_cloudtrail" {
+  type        = bool
+  description = "Create the multi-region CloudTrail trail. Requires real AWS; LocalStack Community only supports CloudTrail on the Ultimate tier, so the identity bucket and queue are still created for fixture testing."
+  default     = false
+}
+
+variable "enable_guardduty" {
+  type        = bool
+  description = "Create the GuardDuty detector. GuardDuty is not emulated by LocalStack; the EventBridge rule and queue remain available for local finding simulation."
+  default     = false
+}
+

@@ -31,6 +31,8 @@ resource "aws_kms_key" "telemetry" {
             "logs.${var.aws_region}.amazonaws.com",
             "secretsmanager.amazonaws.com",
             "lambda.amazonaws.com",
+            "cloudtrail.amazonaws.com",
+            "events.amazonaws.com",
           ]
         }
         Action   = ["kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey*", "kms:DescribeKey"]
@@ -47,6 +49,8 @@ resource "aws_kms_key" "telemetry" {
               "logs.${var.aws_region}.amazonaws.com",
               "secretsmanager.${var.aws_region}.amazonaws.com",
               "lambda.${var.aws_region}.amazonaws.com",
+              "cloudtrail.${var.aws_region}.amazonaws.com",
+              "events.${var.aws_region}.amazonaws.com",
             ]
           }
         }

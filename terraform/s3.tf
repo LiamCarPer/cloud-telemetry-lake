@@ -3,10 +3,11 @@ data "aws_caller_identity" "current" {}
 locals {
   account_id = data.aws_caller_identity.current.account_id
   bucket_names = {
-    raw     = "ot-telemetry-raw-${local.account_id}"
-    staged  = "ot-telemetry-staged-${local.account_id}"
-    reports = "ot-telemetry-reports-${local.account_id}"
-    dlq     = "ot-telemetry-dlq-${local.account_id}"
+    raw      = "ot-telemetry-raw-${local.account_id}"
+    staged   = "ot-telemetry-staged-${local.account_id}"
+    reports  = "ot-telemetry-reports-${local.account_id}"
+    dlq      = "ot-telemetry-dlq-${local.account_id}"
+    identity = "ot-identity-raw-${local.account_id}"
   }
 }
 
@@ -114,6 +115,24 @@ resource "aws_s3_bucket_lifecycle_configuration" "dlq" {
   }
 }
 
+resource "aws_s3_bucket_lifecycle_configuration" "identity" {
+  bucket = aws_s3_bucket.telemetry_buckets["identity"].id
+
+  rule {
+    id     = "identity-retention"
+    status = "Enabled"
+    filter {}
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+
+    expiration {
+      days = 365
+    }
+  }
+}
+
 resource "aws_s3_bucket_public_access_block" "pab" {
   for_each = aws_s3_bucket.telemetry_buckets
   bucket   = each.value.id
@@ -130,22 +149,51 @@ resource "aws_s3_bucket_policy" "tls_enforcement" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      {
-        Sid       = "EnforceTLSOnly"
-        Effect    = "Deny"
-        Principal = "*"
-        Action    = "s3:*"
-        Resource = [
-          each.value.arn,
-          "${each.value.arn}/*"
-        ]
-        Condition = {
-          Bool = {
-            "aws:SecureTransport" = "false"
+    Statement = concat(
+      [
+        {
+          Sid       = "EnforceTLSOnly"
+          Effect    = "Deny"
+          Principal = "*"
+          Action    = "s3:*"
+          Resource = [
+            each.value.arn,
+            "${each.value.arn}/*"
+          ]
+          Condition = {
+            Bool = {
+              "aws:SecureTransport" = "false"
+            }
           }
         }
-      }
-    ]
+      ],
+      each.key == "identity" && var.enable_cloudtrail ? [
+        {
+          Sid       = "AWSCloudTrailAclCheck"
+          Effect    = "Allow"
+          Principal = { Service = "cloudtrail.amazonaws.com" }
+          Action    = "s3:GetBucketAcl"
+          Resource  = each.value.arn
+          Condition = {
+            StringEquals = {
+              "aws:SourceAccount" = local.account_id
+            }
+          }
+        },
+        {
+          Sid       = "AWSCloudTrailWrite"
+          Effect    = "Allow"
+          Principal = { Service = "cloudtrail.amazonaws.com" }
+          Action    = "s3:PutObject"
+          Resource  = "${each.value.arn}/AWSLogs/${local.account_id}/*"
+          Condition = {
+            StringEquals = {
+              "s3:x-amz-acl"      = "bucket-owner-full-control"
+              "aws:SourceAccount" = local.account_id
+            }
+          }
+        },
+      ] : []
+    )
   })
 }

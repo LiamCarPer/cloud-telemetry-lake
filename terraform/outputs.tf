@@ -82,3 +82,33 @@ output "aggregator_log_group" {
   value       = aws_cloudwatch_log_group.aggregator.name
   description = "CloudWatch log group for the incident aggregator Lambda."
 }
+
+output "identity_bucket_name" {
+  value       = aws_s3_bucket.telemetry_buckets["identity"].bucket
+  description = "S3 bucket for CloudTrail log delivery and identity fixtures."
+}
+
+output "identity_queue_url" {
+  value       = aws_sqs_queue.identity_ingest.id
+  description = "SQS queue carrying CloudTrail objects to the identity detector."
+}
+
+output "guardduty_queue_url" {
+  value       = aws_sqs_queue.guardduty_queue.id
+  description = "SQS queue carrying GuardDuty findings from EventBridge."
+}
+
+output "identity_lambda_arn" {
+  value       = aws_lambda_function.identity.arn
+  description = "ARN of the cloud identity detection Lambda."
+}
+
+output "cloudtrail_trail_arn" {
+  value       = var.enable_cloudtrail ? aws_cloudtrail.identity[0].arn : null
+  description = "CloudTrail trail ARN (null when enable_cloudtrail is false)."
+}
+
+output "guardduty_detector_id" {
+  value       = var.enable_guardduty ? aws_guardduty_detector.identity[0].id : null
+  description = "GuardDuty detector ID (null when enable_guardduty is false)."
+}
