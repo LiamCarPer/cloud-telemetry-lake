@@ -58,6 +58,7 @@ graph TD
 *   **Stateful Security Correlation:** Detection records written to DynamoDB with GSIs for severity and host-based querying.
 *   **Automated Incident Response:** DynamoDB Streams trigger the aggregator Lambda to produce NIST SP 800-61 IR reports, grouped into deterministic `INCIDENT_WINDOW_SECONDS` windows so a retried stream batch regenerates the same report, and publish SOC alerts via SNS.
 *   **Analytical Storage:** Parsed logs staged as snappy-compressed Apache Parquet, partitioned by source and date.
+*   **Cloud Identity Detection Plane:** CloudTrail management events and GuardDuty findings feed a dedicated identity detector with seven CloudTrail rules, ATT&CK Enterprise tagging, and the same DynamoDB → NIST report → SNS path.
 *   **Security-Hardened Delivery:** CMK encryption for data, logs and secrets; Secrets Manager for the threat-intel key; scoped IAM with a permissions boundary; CloudWatch alarms on pipeline failure paths; and CI supply-chain scanning (gitleaks, Checkov, Bandit, pip-audit).
 
 ---
@@ -84,6 +85,21 @@ All three workarounds are reversible: the Terraform variables `localstack_endpoi
 
 ---
 
+## Identity Detection Plane
+
+The repo has a second detection plane for AWS control-plane activity:
+
+*   **CloudTrail (management events):** trail → identity bucket → SQS → `ot-identity-detector` → detections + staged Parquet. Seven rules cover root use, console login without MFA, access-key creation, IAM policy changes, CloudTrail/GuardDuty tampering, and console brute force.
+*   **GuardDuty findings:** EventBridge rule → SQS → the same detector, normalized with finding type, severity, affected principal/resource, remote IP and ATT&CK tactic.
+*   **Shared model:** detections land in `ot_detections` with `detection_domain = "identity"`; reports expose `mitre_techniques_by_framework = {ics, enterprise}` and list tactics separately.
+*   **Gated services:** `enable_cloudtrail` and `enable_guardduty` default to `false` because LocalStack Community does not implement those services. The ingestion paths are exercised locally with committed CloudTrail fixtures and GuardDuty-shaped EventBridge events.
+
+```bash
+make identity-demo
+```
+
+---
+
 ## Security Controls
 
 | Area | Implementation |
@@ -92,6 +108,7 @@ All three workarounds are reversible: the Terraform variables `localstack_endpoi
 | **Secrets** | The AbuseIPDB key lives in Secrets Manager behind a customer-managed KMS key. Terraform creates the secret container only, so the value never enters git or Terraform state. `make seed-secret` stores it locally. |
 | **Encryption** | SSE-KMS on S3, SQS and DynamoDB; CMK-encrypted CloudWatch Logs, Secrets Manager and Lambda environment variables; TLS-only S3 bucket policy and public-access blocks. |
 | **Monitoring** | CloudWatch alarms for Lambda errors/throttles, ingest queue age and DLQ depth, routed to the `ot-ops-alerts` topic (set `ops_alert_email` to receive mail). |
+| **Identity detection** | CloudTrail and GuardDuty feed a dedicated identity Lambda; detections carry `detection_domain=identity`. The real trail/detector are gated because LocalStack does not implement them. |
 | **Pipeline** | GitHub Actions pinned to commit SHAs, read-only token permissions, gitleaks secret scanning, Checkov for Terraform, Bandit for Python, pip-audit for dependencies, Dependabot and dependency review. |
 
 Control details, the threat model and residual risks are in [`docs/SECURITY.md`](docs/SECURITY.md); the disclosure policy is [`SECURITY.md`](SECURITY.md).
@@ -170,7 +187,27 @@ python3 src/malcolm_fixture/upload_malcolm_alerts.py --endpoint-url http://local
 python3 -m unittest discover -s tests -t . -v
 ```
 
-The suite covers the parser helpers, the seven detection rules (including rolling-window expiry), the DynamoDB state-store maths, SQS partial batch responses, and NIST report construction. `make test` runs the same command.
+The suite covers the OT and identity parsers, the 7 OT rules plus 7 identity rules, window expiry, the DynamoDB state-store update contract, SQS partial batch responses, secret loading, guard rails, ATT&CK framework grouping, and NIST report construction. It is 78 tests; `make test` runs the same command.
+
+### 8. Run the Identity Demo
+
+Uploads the committed CloudTrail fixtures to the identity bucket and emits a GuardDuty-shaped finding through EventBridge:
+
+```bash
+make identity-demo
+```
+
+Then verify identity detections and staged partitions:
+
+```bash
+AWS_ACCESS_KEY_ID=mock AWS_SECRET_ACCESS_KEY=mock AWS_DEFAULT_REGION=us-east-1 \
+aws --endpoint-url=http://localhost:4566 dynamodb scan --table-name ot_detections \
+  --filter-expression 'detection_domain = :d' \
+  --expression-attribute-values '{":d":{"S":"identity"}}'
+
+AWS_ACCESS_KEY_ID=mock AWS_SECRET_ACCESS_KEY=mock AWS_DEFAULT_REGION=us-east-1 \
+aws --endpoint-url=http://localhost:4566 s3 ls s3://ot-telemetry-staged-000000000000/parsed/ --recursive
+```
 
 ---
 
@@ -186,10 +223,14 @@ In a production AWS environment, the structured telemetry and incident reports a
 *Note: Since Glue and Athena are premium APIs not implemented in the free LocalStack Community Edition, these resources are disabled by default in local deployments via the feature flag `enable_analytics = false`. Set this flag to `true` when deploying to a real AWS account.*
 
 ### 2. AWS Athena Named Queries
-Three production-ready analytical queries are pre-defined in the repository:
+Seven production-ready analytical queries are pre-defined in the repository:
 1. **High-Severity OT Anomalies Over Time**: Groups and aggregates high-severity alerts (`CROSS_ZONE_VIOLATION`, `UNAUTHORIZED_MODBUS_WRITE`, `OT_BRUTE_FORCE_SCAN`) by date and source.
 2. **Top Noisy Hosts**: Identifies the most active logging sources across the network.
 3. **SCADA TTP Patterns**: Parses nested Malcolm NDR JSON alerts, matching specific industrial attack signatures (e.g. Modbus function code violations, S7comm lateral movement).
+4. **Identity IAM Changes**: Groups CloudTrail IAM API calls by date, event, user and source IP.
+5. **Identity Console Logins**: Shows console logins with MFA status and error codes.
+6. **GuardDuty Findings**: Groups findings by date, type and severity.
+7. **Identity/OT Source-IP Overlap**: Joins CloudTrail source addresses against OT detections to find identity activity originating from OT-network addresses.
 
 ### 3. Local Analytics Query CLI
 To run these queries locally against the LocalStack emulation environment, a query client utility is provided. It uses `pandas` and `awswrangler` to run the identical SQL aggregates directly against the S3 staged parquet files:
@@ -200,11 +241,11 @@ AWS_ENDPOINT_URL=http://localhost:4566 \
 .venv/bin/python src/analytics/query_lake.py
 ```
 
-Expected output:
+Example output (OT queries; identity queries are additive):
 ```text
 --- Security Data Lake Analytics CLI ---
 Reading telemetry from s3://ot-telemetry-staged-000000000000/parsed/ (Endpoint: http://localhost:4566)...
-Successfully loaded 24 telemetry logs.
+Successfully loaded <N> telemetry logs.
 
 === QUERY 1: High-Severity OT Anomalies Over Time ===
       date    source  anomaly_count
@@ -235,7 +276,9 @@ host_identifier  log_count
 *   **Objects are staged under `/tmp` before parsing.** The Lambda downloads each object to a per-object temporary directory and then parses it line-by-line from disk rather than streaming directly from S3.
 *   **Staged Parquet is at-least-once under retries.** Detection writes and incident reports are idempotent, but a retried SQS message can re-append its batch as new Parquet files, so the staged dataset may contain duplicate rows after a partial failure. Deduplication is left to the query layer.
 *   **IAM enforcement is not exercised locally.** LocalStack Community does not evaluate IAM policies. The policies are reviewed, linted and unit-guarded, but their enforcement must be verified in a real AWS account.
-*   **Cloud security services are out of scope.** No CloudTrail, GuardDuty, Security Hub, AWS Config, IAM Access Analyzer, SCPs or VPC endpoints. [`docs/SECURITY.md`](docs/SECURITY.md) records them as the production baseline rather than claiming them.
+*   **CloudTrail and GuardDuty services are gated.** LocalStack Community does not implement CloudTrail (Ultimate-only) or GuardDuty, so the trail and detector default to off (`enable_cloudtrail`, `enable_guardduty`). The identity ingestion paths are verified with committed CloudTrail fixtures through S3 and GuardDuty-shaped events through EventBridge; the real services are Terraform-validated, not exercised locally.
+*   **Identity detection content is intentionally small.** Seven CloudTrail management-event rules plus GuardDuty finding normalization. There is no benign baseline or measured false-positive rate, and data events are excluded to control cost and volume.
+*   **Security Hub, AWS Config, IAM Access Analyzer, SCPs and VPC endpoints remain out of scope.** [`docs/SECURITY.md`](docs/SECURITY.md) records them as the production baseline rather than claiming them.
 *   **Secret rotation is manual.** The key is read at cold start and cached; rotating it requires a new secret version and a forced cold start. There is no rotation Lambda.
 *   **One CMK covers data, logs and secrets.** This keeps key-policy review simple in the lab; production should split keys by data classification.
 *   **LocalStack does not report DynamoDB PITR status.** PITR is configured in Terraform, but LocalStack's `describe-table` omits the recovery description and does not exercise restore.
@@ -287,3 +330,16 @@ aws --endpoint-url=http://localhost:4566 sqs receive-message \
 ```
 
 Expected subject format: `[<SEVERITY>] OT Incident <ID> – <N> Detection(s) | Techniques: T0831, T0846, T0886`.
+
+### 5. Identity Detections
+
+After `make identity-demo`, expect identity rows in `ot_detections` with `detection_domain=identity`:
+
+```bash
+AWS_ACCESS_KEY_ID=mock AWS_SECRET_ACCESS_KEY=mock AWS_DEFAULT_REGION=us-east-1 \
+aws --endpoint-url=http://localhost:4566 dynamodb scan --table-name ot_detections \
+  --filter-expression 'detection_domain = :d' \
+  --expression-attribute-values '{":d":{"S":"identity"}}'
+```
+
+Expected reasons include `IDENTITY_ROOT_ACCOUNT_USAGE`, `IDENTITY_CONSOLE_LOGIN_WITHOUT_MFA`, `IDENTITY_ACCESS_KEY_CREATED`, `IDENTITY_CLOUDTRAIL_TAMPERING`, `IDENTITY_CONSOLE_LOGIN_BRUTE_FORCE`, and a `GUARDDUTY_*` finding. Staged partitions should include `source=cloudtrail/` and `source=guardduty/`; reports expose `mitre_techniques_by_framework` with the Enterprise techniques and a separate `mitre_tactics` list.

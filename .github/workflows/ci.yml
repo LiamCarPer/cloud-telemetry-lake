@@ -61,7 +61,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements-ci.txt
-      - run: bandit -q -r src/aggregator_lambda src/parser_lambda/handler.py src/parser_lambda/log_parser_toolkit
+      - run: bandit -q -r src/aggregator_lambda src/parser_lambda/handler.py src/parser_lambda/identity_handler.py src/parser_lambda/log_parser_toolkit src/identity_fixture
       - run: pip-audit -r requirements-dev.txt
       - run: checkov -d terraform --config-file .checkov.yaml --compact
 

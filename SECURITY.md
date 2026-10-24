@@ -26,13 +26,18 @@ workloads without completing the production hardening items in
 | Secrets | AbuseIPDB key stored in Secrets Manager behind a customer-managed KMS key; no secret value in git or Terraform state; `make seed-secret` for the lab |
 | Encryption | SSE-KMS for S3, SQS and DynamoDB; CMK-encrypted CloudWatch Logs and Secrets Manager; TLS-only S3 bucket policy |
 | Monitoring | CloudWatch alarms for Lambda errors/throttles, queue age, and DLQ depth, routed to an operations SNS topic |
+| Identity | CloudTrail management-event rules and GuardDuty finding normalization feed the shared detections and NIST reports; the real services are gated because LocalStack does not implement them |
 | Pipeline | GitHub Actions pinned to commit SHAs, read-only token permissions, gitleaks, Checkov, Bandit, pip-audit, Dependabot, dependency review |
 
 ## Known limitations
 
-- No CloudTrail, GuardDuty, Security Hub, AWS Config or IAM Access Analyzer in
-  this stack. These require a real AWS account and are documented as the
-  production baseline, not claimed as implemented.
+- CloudTrail and GuardDuty are implemented in Terraform behind
+  `enable_cloudtrail` / `enable_guardduty`, but LocalStack Community does not
+  implement the services. Their ingestion paths are exercised with CloudTrail
+  fixtures and GuardDuty-shaped EventBridge events; the real services are not
+  run locally.
+- Security Hub, AWS Config, IAM Access Analyzer, SCPs and VPC endpoints remain
+  out of scope and are documented as the production baseline.
 - LocalStack Community does not enforce IAM policies. Policies are reviewed,
   linted and unit-guarded, but their enforcement is not exercised locally.
 - Secret rotation is a documented manual runbook, not an automated rotation

@@ -28,6 +28,7 @@ for a production account.
 | Credential/API key committed to git | `.gitignore` for env/keys, gitleaks in CI, secret value lives only in Secrets Manager | A key pasted into an unrelated file can still evade regexes; rotate immediately if leaked |
 | API key visible in Terraform state or Lambda env | Secret *container* only in Terraform; Lambda receives the secret ARN; value set out of band | Anyone with `lambda:GetFunctionConfiguration` sees the ARN, not the value; state does not contain the key |
 | Stolen Lambda credentials | Scoped identity policies + permissions boundary; no `Scan`, `DeleteItem`, wildcard logs or unused bucket reads | LocalStack does not enforce IAM; production must verify with IAM Access Analyzer / policy simulator |
+| Identity attack (root use, no-MFA login, key creation, IAM changes, log tampering) | CloudTrail management-event rules and GuardDuty finding normalization feed the same detections and NIST reports | Seven management-event rules only; no data events or benign baseline; CloudTrail/GuardDuty services are not exercised locally |
 | Data at rest read from S3/SQS/DynamoDB | SSE-KMS with a CMK; bucket public-access block; TLS-only bucket policy | One CMK for the lab; production should split data/logs/secrets keys |
 | Poison message loops forever | SQS redrive after 3 receives; aggregator stream retries capped at 3 with bisect + on-failure DLQ | Parser's S3 DLQ stores unparseable lines but does not alarm directly; DLQ depth alarm covers SQS |
 | Pipeline silently stops | Alarms on Lambda errors/throttles, queue age, DLQ depth → ops SNS topic | No paging integration in the lab; email subscription is optional |
@@ -35,13 +36,15 @@ for a production account.
 
 ## IAM design
 
-- Two execution roles, one per function. The parser can read raw objects,
-  write staged Parquet and DLQ records, write detections, and read/update the
-  state table. The aggregator can read the detection stream, write reports and
-  publish incident alerts.
-- Both roles attach `ot-lambda-permissions-boundary`, a deny-by-default
-  ceiling that lists only the services and actions either function needs.
-- Log permissions are scoped to the two function log groups, not
+- Three execution roles: parser, aggregator and identity detector. The parser
+  can read raw objects, write staged Parquet and DLQ records, write detections,
+  and read/update the state table. The aggregator can read the detection stream,
+  write reports and publish incident alerts. The identity detector can read
+  CloudTrail objects and consume the identity/GuardDuty queues, write
+  detections and stage identity records.
+- All three roles attach `ot-lambda-permissions-boundary`, a deny-by-default
+  ceiling that lists only the services and actions the functions need.
+- Log permissions are scoped to the three function log groups, not
   `arn:aws:logs:*:*:*`.
 - `dynamodb:Scan` and `dynamodb:DeleteItem` were removed; the parser never
   used them. `dynamodb:BatchGetItem` was added because the state store does
@@ -100,6 +103,28 @@ in a real account. The incident topic remains separate for SOC-facing alerts.
 `ot-ops-alerts-sink` (SQS) is a LocalStack verification target so alarm
 delivery can be proven without email credentials (`make alarm-test`).
 
+## Identity detection plane
+
+- **CloudTrail (management events):** the trail is gated by
+  `enable_cloudtrail` because LocalStack supports CloudTrail only on its
+  Ultimate tier. Logs land in `ot-identity-raw-<account>` → identity queue →
+  identity Lambda. Seven rules cover root use, console login without MFA,
+  access-key creation, IAM policy changes, CloudTrail tampering, GuardDuty
+  tampering and console brute force.
+- **GuardDuty:** the detector is gated by `enable_guardduty` because LocalStack
+  does not emulate it. Findings flow through an EventBridge rule → SQS →
+  identity Lambda and are normalized with finding type, severity,
+  principal/resource, remote IP and ATT&CK tactic. GuardDuty is a managed
+  detector; the repo does not claim custom GuardDuty rule authoring.
+- **Shared model:** detections carry `detection_domain = "identity"`. Reports
+  separate `mitre_techniques_by_framework = {ics, enterprise}` and list
+  `mitre_tactics` separately. GuardDuty findings have tactics but no invented
+  technique IDs.
+- **Local verification:** the real services are not run locally. The S3 path is
+  exercised with committed CloudTrail fixtures and the EventBridge path with a
+  GuardDuty-shaped `put-events` call. The trail/detector resources are
+  Terraform-validated only.
+
 ## CI/CD supply chain
 
 - Every action is pinned to a **full commit SHA** with a version comment;
@@ -121,8 +146,7 @@ untested configuration, so it is listed here instead.
 
 | Control | Why it is missing here |
 | :-- | :-- |
-| CloudTrail with log-file validation + KMS | LocalStack Ultimate-tier only |
-| GuardDuty, Security Hub, AWS Config rules, IAM Access Analyzer | Not implemented by LocalStack Community; require a real account |
+| Security Hub, AWS Config rules, IAM Access Analyzer | Not implemented by LocalStack Community; require a real account |
 | SCP guardrails and permission-set boundaries | Organizations-level, outside a single lab account |
 | VPC endpoints for S3/SQS/DynamoDB/Secrets Manager | Lambda runs outside a VPC in the lab |
 | AWS WAF / public ingress controls | No public ingress exists |
@@ -132,10 +156,11 @@ untested configuration, so it is listed here instead.
 ## Verification
 
 ```bash
-make test                 # 57 unit tests, including security invariants
+make test                 # 78 unit tests, including security invariants
 make validate             # terraform fmt/validate
 make security             # bandit, pip-audit, checkov
 make seed-secret          # requires ABUSEIPDB_API_KEY in the shell
+make identity-demo        # CloudTrail fixtures + a GuardDuty EventBridge event
 aws --endpoint-url=http://localhost:4566 cloudwatch describe-alarms
 aws --endpoint-url=http://localhost:4566 secretsmanager describe-secret \
   --secret-id ot-telemetry/abuseipdb
@@ -146,10 +171,10 @@ wildcard log resource, `dynamodb:Scan`/`DeleteItem`, a plaintext secret
 variable, a missing permissions boundary, or a missing failure alarm is
 reintroduced.
 
-## Live verification (2026-10-19, LocalStack 4.14.0)
+## Live verification (2026-10-24, LocalStack 4.14.0)
 
 - `terraform apply` completed with the security resources in place: KMS alias,
-  Secrets Manager secret, permissions boundary, 5 queues, 5 alarms, encrypted
+  Secrets Manager secret, permissions boundary, 9 queues, 9 alarms, encrypted
   log groups, S3 versioning/lifecycle, and SSE-KMS/SQS/DynamoDB settings.
 - The parser processed a gzipped Malcolm fixture (4 records → staged Parquet)
   and a sensor event that produced 2 detection records.
@@ -162,8 +187,19 @@ reintroduced.
   secret was seeded).
 - `make alarm-test` moved `ot-ingest-dlq-depth` to `ALARM` and delivered the
   state-change notification to `ot-ops-alerts-sink`.
+- `make identity-demo` produced 6 identity detections: 4 from CloudTrail
+  (root + no-MFA, access-key creation, CloudTrail tampering), 1 stateful
+  console brute-force detection after 5 failed logins, and 1 normalized
+  GuardDuty finding. Staged partitions included `source=cloudtrail` and
+  `source=guardduty`; the CloudTrail report exposed `T1078.004`, `T1098.001`,
+  `T1562.008` under the `enterprise` framework with tactics `TA0001`, `TA0003`,
+  `TA0005`.
+- The state-store live run exposed and fixed a real bug: `ttl` is a DynamoDB
+  reserved word, so the original `SET ttl = :ttl` update failed silently. It now
+  uses `ExpressionAttributeNames` (`#ttl`, `#hits`) with a regression test.
 
 **Not verified locally:** IAM policy enforcement (paid LocalStack feature),
-DynamoDB PITR status/restore (LocalStack does not report it), CloudTrail and
-the other production-baseline services. These remain stated limitations rather
-than claims.
+the CloudTrail and GuardDuty services themselves (gated; their ingestion paths
+are fixture/EventBridge-tested), DynamoDB PITR status/restore, and the other
+production-baseline services. These remain stated limitations rather than
+claims.

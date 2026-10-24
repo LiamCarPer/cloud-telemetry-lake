@@ -1,10 +1,12 @@
-.PHONY: setup test fmt validate seed-secret security alarm-test
+PYTHON ?= $(shell if [ -x .venv/bin/python ]; then echo .venv/bin/python; else echo python3; fi)
+
+.PHONY: setup test fmt validate seed-secret security alarm-test identity-demo
 
 setup:
-	python3 -m pip install -r requirements-dev.txt
+	$(PYTHON) -m pip install -r requirements-dev.txt
 
 test:
-	python3 -m unittest discover -s tests -t . -v
+	$(PYTHON) -m unittest discover -s tests -t . -v
 
 fmt:
 	terraform fmt -recursive terraform
@@ -27,7 +29,7 @@ seed-secret:
 		--secret-string "{\"api_key\":\"$$ABUSEIPDB_API_KEY\"}"
 
 security:
-	bandit -q -r src/aggregator_lambda src/parser_lambda/handler.py src/parser_lambda/log_parser_toolkit
+	bandit -q -r src/aggregator_lambda src/parser_lambda/handler.py src/parser_lambda/identity_handler.py src/parser_lambda/log_parser_toolkit src/identity_fixture
 	pip-audit -r requirements-dev.txt
 	checkov -d terraform --config-file .checkov.yaml --compact
 
@@ -45,3 +47,9 @@ alarm-test:
 		sqs receive-message \
 		--queue-url $${AWS_ENDPOINT_URL:-http://localhost:4566}/000000000000/ot-ops-alerts-sink \
 		--max-number-of-messages 1
+
+# Exercise the identity plane: CloudTrail fixtures through S3->SQS->Lambda and
+# a GuardDuty finding through EventBridge->SQS->Lambda.
+identity-demo:
+	$(PYTHON) src/identity_fixture/upload_identity_fixtures.py \
+		--endpoint-url $${AWS_ENDPOINT_URL:-http://localhost:4566}
