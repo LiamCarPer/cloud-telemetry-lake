@@ -103,6 +103,17 @@ class TestReportBuilder(unittest.TestCase):
         self.assertEqual(early_report["window_start"], "2026-05-20T19:25:00+00:00")
         self.assertEqual(late_report["window_start"], "2026-05-20T19:30:00+00:00")
 
+    def test_window_end_covers_latest_detection(self):
+        detections = [
+            self._detection("UNAUTHORIZED_MODBUS_WRITE#172.24.0.10", "2026-05-20T19:27:26+00:00"),
+            self._detection("CROSS_ZONE_VIOLATION#172.24.0.10", "2026-05-20T19:32:10+00:00", severity="HIGH"),
+        ]
+
+        report = build_report(detections)
+
+        self.assertEqual(report["window_start"], "2026-05-20T19:25:00+00:00")
+        self.assertEqual(report["window_end"], "2026-05-20T19:32:10+00:00")
+
     def test_custom_window_seconds(self):
         detections = [
             self._detection("UNAUTHORIZED_MODBUS_WRITE#172.24.0.10", "2026-05-20T19:27:26+00:00")
@@ -145,6 +156,61 @@ class TestReportBuilder(unittest.TestCase):
         self.assertIn("T0831", report["mitre_techniques"])
         self.assertIn("T0813", report["mitre_techniques"])
         self.assertEqual(report["severity"], "HIGH")
+
+    def test_identity_and_ot_detections_are_grouped_by_framework(self):
+        detections = [
+            {
+                "incident_correlator": "IDENTITY_ROOT_ACCOUNT_USAGE#203.0.113.5",
+                "timestamp": "2026-10-24T12:00:00Z#aaaa",
+                "event_timestamp": "2026-10-24T12:00:00Z",
+                "severity": "HIGH",
+                "host": "root",
+                "src_ip": "203.0.113.5",
+                "alert_reason": "IDENTITY_ROOT_ACCOUNT_USAGE",
+                "detection_domain": "identity",
+                "mitre_technique": "T1078.004",
+                "mitre_framework": "enterprise",
+                "mitre_tactic": "TA0001",
+            },
+            {
+                "incident_correlator": "UNAUTHORIZED_MODBUS_WRITE#172.24.0.10",
+                "timestamp": "2026-10-24T12:02:00Z#bbbb",
+                "event_timestamp": "2026-10-24T12:02:00Z",
+                "severity": "MEDIUM",
+                "host": "ot-gateway",
+                "src_ip": "172.24.0.10",
+                "alert_reason": "UNAUTHORIZED_MODBUS_WRITE",
+                "detection_domain": "ot",
+            },
+        ]
+
+        report = build_report(detections)
+
+        self.assertEqual(report["mitre_techniques_by_framework"], {
+            "ics": ["T0831"],
+            "enterprise": ["T1078.004"],
+        })
+        self.assertEqual(report["mitre_techniques"], ["T0831", "T1078.004"])
+        self.assertEqual(report["mitre_tactics"], ["TA0001"])
+        self.assertEqual(report["detection_domains"], ["identity", "ot"])
+        self.assertEqual(report["identity_detection_count"], 1)
+        self.assertEqual(report["ot_detection_count"], 1)
+        self.assertTrue(any("root credentials" in action.lower() for action in report["recommended_actions"]))
+
+    def test_guardduty_findings_get_generic_actions(self):
+        report = build_report([
+            {
+                "alert_reason": "GUARDDUTY_CREDENTIALACCESS_IAMUSER_ANOMALOUSBEHAVIOR",
+                "severity": "HIGH",
+                "host": "alice",
+                "src_ip": "203.0.113.99",
+                "detection_domain": "identity",
+                "guardduty_type": "CredentialAccess:IAMUser/AnomalousBehavior",
+            }
+        ])
+
+        self.assertTrue(any("Triage the GuardDuty finding" in action for action in report["recommended_actions"]))
+        self.assertEqual(report["detection_domains"], ["identity"])
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,83 @@
+{
+  "Records": [
+    {
+      "eventVersion": "1.09",
+      "eventTime": "2026-10-24T12:00:00Z",
+      "eventName": "ConsoleLogin",
+      "eventSource": "signin.amazonaws.com",
+      "eventType": "AwsConsoleSignIn",
+      "awsRegion": "us-east-1",
+      "sourceIPAddress": "203.0.113.5",
+      "userAgent": "Mozilla/5.0",
+      "userIdentity": {
+        "type": "Root",
+        "principalId": "000000000000",
+        "arn": "arn:aws:iam::000000000000:root",
+        "accountId": "000000000000"
+      },
+      "additionalEventData": {
+        "MFAUsed": "No"
+      },
+      "responseElements": {
+        "ConsoleLogin": "Success"
+      }
+    },
+    {
+      "eventVersion": "1.09",
+      "eventTime": "2026-10-24T12:05:00Z",
+      "eventName": "CreateAccessKey",
+      "eventSource": "iam.amazonaws.com",
+      "eventType": "AwsApiCall",
+      "awsRegion": "us-east-1",
+      "sourceIPAddress": "198.51.100.7",
+      "userAgent": "aws-cli/2.15.0",
+      "userIdentity": {
+        "type": "IAMUser",
+        "principalId": "AIDAEXAMPLE",
+        "arn": "arn:aws:iam::000000000000:user/alice",
+        "userName": "alice",
+        "accountId": "000000000000"
+      },
+      "requestParameters": {
+        "userName": "bob"
+      }
+    },
+    {
+      "eventVersion": "1.09",
+      "eventTime": "2026-10-24T12:06:00Z",
+      "eventName": "StopLogging",
+      "eventSource": "cloudtrail.amazonaws.com",
+      "eventType": "AwsApiCall",
+      "awsRegion": "us-east-1",
+      "sourceIPAddress": "198.51.100.7",
+      "userAgent": "aws-cli/2.15.0",
+      "userIdentity": {
+        "type": "IAMUser",
+        "principalId": "AIDAEXAMPLE",
+        "arn": "arn:aws:iam::000000000000:user/alice",
+        "userName": "alice",
+        "accountId": "000000000000"
+      },
+      "requestParameters": {
+        "name": "ot-telemetry-trail"
+      }
+    },
+    {
+      "eventVersion": "1.09",
+      "eventTime": "2026-10-24T12:07:00Z",
+      "eventName": "DescribeInstances",
+      "eventSource": "ec2.amazonaws.com",
+      "eventType": "AwsApiCall",
+      "awsRegion": "us-east-1",
+      "sourceIPAddress": "198.51.100.7",
+      "userAgent": "aws-cli/2.15.0",
+      "userIdentity": {
+        "type": "IAMUser",
+        "principalId": "AIDAEXAMPLE",
+        "arn": "arn:aws:iam::000000000000:user/alice",
+        "userName": "alice",
+        "accountId": "000000000000"
+      }
+    }
+  ]
+}

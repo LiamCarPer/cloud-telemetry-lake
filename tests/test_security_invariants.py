@@ -66,5 +66,27 @@ class TestMonitoringInvariants(unittest.TestCase):
                 self.assertIn(f'aws_cloudwatch_metric_alarm" "{alarm}"', monitoring)
 
 
+class TestIdentityPlaneInvariants(unittest.TestCase):
+    def test_identity_role_has_permissions_boundary(self):
+        identity = _read("identity.tf")
+        self.assertIn(
+            "permissions_boundary = aws_iam_policy.lambda_permissions_boundary.arn",
+            identity,
+        )
+
+    def test_real_services_are_gated(self):
+        variables = _read("variables.tf")
+        identity = _read("identity.tf")
+        self.assertRegex(variables, r'variable "enable_cloudtrail"[\s\S]*?default\s*=\s*false')
+        self.assertRegex(variables, r'variable "enable_guardduty"[\s\S]*?default\s*=\s*false')
+        self.assertRegex(identity, r'resource "aws_cloudtrail" "identity"[\s\S]*?count\s*=\s*var\.enable_cloudtrail')
+        self.assertRegex(identity, r'resource "aws_guardduty_detector" "identity"[\s\S]*?count\s*=\s*var\.enable_guardduty')
+
+    def test_identity_lambda_uses_shared_artifact_and_handler(self):
+        identity = _read("identity.tf")
+        self.assertIn('handler          = "identity_handler.lambda_handler"', identity)
+        self.assertIn("aws_s3_object.lambda_zip_upload.key", identity)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,37 @@
+{
+  "version": "0",
+  "id": "b6f8a0f0-0000-4000-8000-000000000001",
+  "detail-type": "GuardDuty Finding",
+  "source": "aws.guardduty",
+  "account": "000000000000",
+  "time": "2026-10-24T12:20:00Z",
+  "region": "us-east-1",
+  "resources": [],
+  "detail": {
+    "schemaVersion": "2.0",
+    "id": "gd-finding-0001",
+    "type": "CredentialAccess:IAMUser/AnomalousBehavior",
+    "severity": 8.0,
+    "createdAt": "2026-10-24T12:19:00Z",
+    "updatedAt": "2026-10-24T12:20:00Z",
+    "description": "Unusual credential use was observed for an IAM principal.",
+    "resource": {
+      "resourceType": "AccessKey",
+      "accessKeyDetails": {
+        "accessKeyId": "AKIAEXAMPLE000000000",
+        "principalId": "arn:aws:iam::000000000000:user/alice",
+        "userName": "alice",
+        "userType": "IAMUser"
+      }
+    },
+    "service": {
+      "action": {
+        "awsApiCallAction": {
+          "remoteIpDetails": {
+            "ipAddressV4": "203.0.113.99"
+          }
+        }
+      }
+    }
+  }
+}
