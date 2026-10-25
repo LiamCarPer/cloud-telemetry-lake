@@ -36,7 +36,13 @@ def severity_from_score(score: Any) -> str:
 
 def remote_ip(detail: Dict[str, Any]) -> str:
     action = (detail.get("service") or {}).get("action") or {}
-    for key in ("awsApiCallAction", "networkConnectionAction", "portProbeAction", "dnsRequestAction"):
+    for key in (
+        "awsApiCallAction",
+        "networkConnectionAction",
+        "portProbeAction",
+        "dnsRequestAction",
+        "kubernetesApiCallAction",
+    ):
         node = action.get(key) or {}
         ip = (node.get("remoteIpDetails") or {}).get("ipAddressV4")
         if ip:
@@ -50,19 +56,34 @@ def normalize_guardduty_event(event: Dict[str, Any]) -> Dict[str, Any]:
     resource = detail.get("resource") or {}
     access = resource.get("accessKeyDetails") or {}
     instance = resource.get("instanceDetails") or {}
+    kube = resource.get("kubernetesDetails") or {}
+    workload = kube.get("kubernetesWorkloadDetails") or {}
 
     finding_type = detail.get("type") or "Unknown"
     score = detail.get("severity", 0)
     prefix = finding_type.split(":", 1)[0]
     tactic = TACTIC_BY_FINDING_PREFIX.get(prefix)
+    is_kubernetes = (
+        "Kubernetes" in finding_type
+        or resource.get("resourceType") == "KubernetesCluster"
+        or bool(kube)
+    )
 
     host = (
-        access.get("userName")
+        workload.get("name")
+        or access.get("userName")
         or instance.get("instanceId")
         or resource.get("resourceType")
         or "aws-account"
     )
-    user_arn = access.get("principalId") or access.get("userName") or instance.get("instanceId") or "unknown"
+    user_arn = (
+        access.get("principalId")
+        or access.get("userName")
+        or workload.get("name")
+        or instance.get("instanceId")
+        or "unknown"
+    )
+    namespace = workload.get("namespace", "")
     timestamp = (
         detail.get("updatedAt")
         or detail.get("createdAt")
@@ -76,6 +97,7 @@ def normalize_guardduty_event(event: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "timestamp": timestamp,
         "host": host,
+        "namespace": namespace,
         "user_name": access.get("userName") or "",
         "user_arn": user_arn,
         "source_ip": remote_ip(detail),
@@ -83,9 +105,9 @@ def normalize_guardduty_event(event: Dict[str, Any]) -> Dict[str, Any]:
         "details": f"GuardDuty {finding_type} (severity {score}): {description}",
         "severity": severity_from_score(score),
         "mitre_tactic": tactic,
-        "mitre_framework": "enterprise",
+        "mitre_framework": "containers" if is_kubernetes else "enterprise",
         "guardduty_type": finding_type,
         "guardduty_severity": str(score),
-        "detection_domain": "identity",
+        "detection_domain": "kubernetes" if is_kubernetes else "identity",
         "raw_line": json.dumps(event, sort_keys=True, default=str),
     }

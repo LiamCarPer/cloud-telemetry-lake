@@ -76,7 +76,67 @@ RECOMMENDED_ACTIONS: Dict[str, List[str]] = {
         "Check whether any attempt succeeded and reset credentials if needed.",
         "Enable account lockout or adaptive authentication for console access.",
     ],
+    # Kubernetes / containers
+    "K8S_POD_EXEC": [
+        "Confirm the exec was authorised and identify the initiating identity.",
+        "Capture the pod's process and network context for forensics.",
+        "Review recent creations of the pod and any credentials it can reach.",
+        "Consider disabling interactive exec outside break-glass workflows.",
+    ],
+    "K8S_PRIVILEGED_POD": [
+        "Delete or isolate the workload and preserve its spec for forensics.",
+        "Check the node for host-level compromise and unexpected processes.",
+        "Enforce Pod Security Standards or admission policy to block privileged pods.",
+    ],
+    "K8S_SENSITIVE_HOSTPATH": [
+        "Remove the hostPath mount and isolate the workload.",
+        "Check whether the host path was read or modified.",
+        "Enforce admission policy that denies sensitive hostPath mounts.",
+    ],
+    "K8S_CLUSTER_ADMIN_BINDING": [
+        "Revert the binding and identify the actor and source address.",
+        "Audit all actions performed by the newly bound principal.",
+        "Review cluster-admin and wildcard RBAC grants across the cluster.",
+    ],
+    "K8S_SECRET_ACCESS": [
+        "Confirm the access was expected and identify the workload identity.",
+        "Rotate exposed credentials if the read was unauthorised.",
+        "Scope RBAC so workloads cannot read secrets they do not need.",
+    ],
+    "K8S_SERVICE_ACCOUNT_TOKEN": [
+        "Confirm the token request was expected and revoke it if not.",
+        "Review the service account's RBAC and audience restrictions.",
+        "Check for use of the token from unexpected source addresses.",
+    ],
+    "K8S_ANONYMOUS_ACCESS": [
+        "Identify the exposed API endpoint and the anonymous request path.",
+        "Disable anonymous authentication or restrict it at the network edge.",
+        "Review RBAC grants to system:unauthenticated.",
+    ],
+    "K8S_RBAC_CHANGE": [
+        "Compare the RBAC change with the approved change record.",
+        "Revert unexpected grants and review the actor's recent activity.",
+        "Check for new role bindings or wildcard permissions.",
+    ],
+    "K8S_ADMISSION_WEBHOOK_TAMPER": [
+        "Restore the webhook configuration and preserve the previous object.",
+        "Identify the actor and check for workloads admitted during the gap.",
+        "Alert on any change to admission or policy enforcement.",
+    ],
 }
+
+FALCO_ACTIONS: List[str] = [
+    "Triage the Falco event and confirm the workload, namespace and process.",
+    "Capture pod/node context and isolate the workload if the activity is unexpected.",
+    "Review the same workload for further runtime alerts and network connections.",
+    "Tune the Falco rule with a narrowly scoped exception only after validation.",
+]
+
+KUBERNETES_ACTIONS: List[str] = [
+    "Review the Kubernetes audit event and confirm the initiating identity.",
+    "Capture the object spec, namespace and source address for forensics.",
+    "Apply the least-privilege RBAC or admission policy that prevents recurrence.",
+]
 
 GUARDDUTY_ACTIONS: List[str] = [
     "Triage the GuardDuty finding and confirm the affected principal and resource.",
@@ -142,7 +202,8 @@ def build_report(detections: List[Dict[str, Any]], window_seconds: int = DEFAULT
 
     detection_domains = sorted({det.get("detection_domain", "ot") for det in detections})
     identity_count = sum(1 for det in detections if det.get("detection_domain") == "identity")
-    ot_count = len(detections) - identity_count
+    kubernetes_count = sum(1 for det in detections if det.get("detection_domain") == "kubernetes")
+    ot_count = len(detections) - identity_count - kubernetes_count
 
     # Collect affected assets
     hosts = sorted({
@@ -173,6 +234,7 @@ def build_report(detections: List[Dict[str, Any]], window_seconds: int = DEFAULT
         "detection_domains": detection_domains,
         "ot_detection_count": ot_count,
         "identity_detection_count": identity_count,
+        "kubernetes_detection_count": kubernetes_count,
         "mitre_techniques": mitre_techniques,
         "mitre_techniques_by_framework": mitre_by_framework,
         "mitre_tactics": mitre_tactics,
@@ -242,16 +304,17 @@ def _derive_incident_id(detections: List[Dict[str, Any]], window_start: Optional
 
 
 def _collect_mitre(detections: List[Dict[str, Any]]) -> Dict[str, List[str]]:
-    """Collect ATT&CK techniques separately for ICS and Enterprise workloads."""
-    by_framework = {"ics": set(), "enterprise": set()}
+    """Collect ATT&CK techniques separately for ICS, Enterprise and Containers."""
+    by_framework = {"ics": set(), "enterprise": set(), "containers": set()}
+    default_framework = {"identity": "enterprise", "kubernetes": "containers"}
     for det in detections:
         technique = det.get("mitre_technique") or MITRE_MAP.get(det.get("alert_reason", ""))
         if not technique:
             continue
         framework = det.get("mitre_framework")
         if not framework:
-            framework = "enterprise" if det.get("detection_domain") == "identity" else "ics"
-        bucket = "enterprise" if str(framework).lower() in ("enterprise", "identity") else "ics"
+            framework = default_framework.get(det.get("detection_domain", "ot"), "ics")
+        bucket = framework if framework in by_framework else "ics"
         by_framework[bucket].add(str(technique))
     return {key: sorted(values) for key, values in by_framework.items()}
 
@@ -269,12 +332,20 @@ def _build_recommended_actions(detections: List[Dict[str, Any]]) -> List[str]:
     actions: List[str] = []
     seen_types: set = set()
     guardduty_seen = False
+    falco_seen = False
     for det in detections:
         alert_type = det.get("alert_reason", "")
         if alert_type and alert_type not in seen_types:
             seen_types.add(alert_type)
-            actions.extend(RECOMMENDED_ACTIONS.get(alert_type, []))
+            specific = RECOMMENDED_ACTIONS.get(alert_type)
+            if specific:
+                actions.extend(specific)
+            elif alert_type.startswith("K8S_"):
+                actions.extend(KUBERNETES_ACTIONS)
             if alert_type.startswith("GUARDDUTY_") and not guardduty_seen:
                 guardduty_seen = True
                 actions.extend(GUARDDUTY_ACTIONS)
+            if alert_type.startswith("FALCO_") and not falco_seen:
+                falco_seen = True
+                actions.extend(FALCO_ACTIONS)
     return actions

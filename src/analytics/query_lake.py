@@ -45,7 +45,11 @@ def main():
         "proto", "in_iface", "alert", "flow", "date", "source",
         "detection_domain", "event_name", "event_source", "user_arn", "user_name",
         "user_type", "source_ip", "mfa_used", "error_code", "account_id",
-        "guardduty_type", "guardduty_severity", "mitre_tactic", "alert_reason", "details"
+        "guardduty_type", "guardduty_severity", "mitre_tactic", "alert_reason", "details",
+        "audit_id", "request_received_timestamp", "stage", "verb", "username", "user_groups", "namespace", "resource",
+        "subresource", "object_name", "api_group", "request_uri", "request_object", "container_image",
+        "workload", "pod", "container", "process", "command", "file", "user",
+        "falco_rule", "falco_priority", "severity"
     ]
     for col in expected_cols:
         if col not in df.columns:
@@ -167,6 +171,82 @@ def main():
             print("No identity/OT source-IP overlap found.")
     else:
         print("Both CloudTrail and OT telemetry are required for this query.")
+    print()
+
+    # Query 7: Kubernetes exec/attach
+    print("=== QUERY 7: Kubernetes Exec/Attach Events ===")
+    k8s = df[df["source"] == "k8s_audit"] if "source" in df.columns else pd.DataFrame()
+    if not k8s.empty:
+        execs = k8s[
+            (k8s["resource"] == "pods")
+            & (k8s["subresource"].isin(["exec", "attach"]))
+        ]
+        if not execs.empty:
+            cols = ["timestamp", "username", "namespace", "object_name", "verb", "subresource", "source_ip"]
+            print(execs[[c for c in cols if c in execs.columns]].to_string(index=False))
+        else:
+            print("No Kubernetes exec/attach events found.")
+    else:
+        print("No Kubernetes audit telemetry found.")
+    print()
+
+    # Query 8: Privileged workloads / sensitive hostPath
+    print("=== QUERY 8: Kubernetes Privileged Workloads / HostPath ===")
+    if not k8s.empty:
+        risky = k8s[
+            k8s["request_object"].str.contains('"privileged": true', regex=False, na=False)
+            | k8s["request_object"].str.contains("hostPath", regex=False, na=False)
+        ]
+        if not risky.empty:
+            cols = ["timestamp", "username", "namespace", "object_name", "resource", "container_image"]
+            print(risky[[c for c in cols if c in risky.columns]].to_string(index=False))
+        else:
+            print("No privileged workloads or hostPath mounts found.")
+    else:
+        print("No Kubernetes audit telemetry found.")
+    print()
+
+    # Query 9: Kubernetes RBAC changes
+    print("=== QUERY 9: Kubernetes RBAC Changes ===")
+    if not k8s.empty:
+        rbac = k8s[k8s["resource"].isin(["roles", "clusterroles", "rolebindings", "clusterrolebindings"])]
+        if not rbac.empty:
+            cols = ["timestamp", "verb", "username", "resource", "namespace", "object_name", "source_ip"]
+            print(rbac[[c for c in cols if c in rbac.columns]].to_string(index=False))
+        else:
+            print("No Kubernetes RBAC changes found.")
+    else:
+        print("No Kubernetes audit telemetry found.")
+    print()
+
+    # Query 10: Anonymous Kubernetes access
+    print("=== QUERY 10: Kubernetes Anonymous Access ===")
+    if not k8s.empty:
+        anonymous = k8s[
+            (k8s["username"] == "system:anonymous")
+            | k8s["user_groups"].str.contains("system:unauthenticated", regex=False, na=False)
+        ]
+        if not anonymous.empty:
+            cols = ["timestamp", "verb", "resource", "namespace", "object_name", "source_ip", "response_code"]
+            print(anonymous[[c for c in cols if c in anonymous.columns]].to_string(index=False))
+        else:
+            print("No anonymous Kubernetes access found.")
+    else:
+        print("No Kubernetes audit telemetry found.")
+    print()
+
+    # Query 11: Falco high-severity runtime events
+    print("=== QUERY 11: Falco High-Severity Events ===")
+    falco = df[df["source"] == "falco"] if "source" in df.columns else pd.DataFrame()
+    if not falco.empty:
+        high = falco[falco["severity"].isin(["HIGH", "MEDIUM"])]
+        if not high.empty:
+            cols = ["timestamp", "falco_rule", "falco_priority", "severity", "namespace", "pod", "process", "command"]
+            print(high[[c for c in cols if c in high.columns]].to_string(index=False))
+        else:
+            print("No high-severity Falco events found.")
+    else:
+        print("No Falco runtime telemetry found.")
 
 if __name__ == "__main__":
     main()

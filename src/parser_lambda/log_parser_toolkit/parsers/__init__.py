@@ -5,6 +5,8 @@ from .web import WebLogParser
 from .windows import WindowsLogParser
 from .json import JsonLinesParser
 from .cloudtrail import CloudTrailParser
+from .kubernetes_audit import KubernetesAuditParser
+from .falco import FalcoParser
 
 def get_available_parsers():
     """

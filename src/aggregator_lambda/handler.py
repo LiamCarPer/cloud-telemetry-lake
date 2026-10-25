@@ -145,6 +145,7 @@ def lambda_handler(event, context):
             "detection_count": report["detection_count"],
             "detection_domains": report["detection_domains"],
             "identity_detection_count": report["identity_detection_count"],
+            "kubernetes_detection_count": report["kubernetes_detection_count"],
             "mitre_techniques": report["mitre_techniques"],
             "affected_assets": report["affected_assets"],
             "nist_phase": report["nist_phase"],

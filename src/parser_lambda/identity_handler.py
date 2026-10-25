@@ -150,9 +150,10 @@ def _write_detection(row: Dict[str, Any], alert: Dict[str, Any], original_key: s
         "alert_reason": reason,
         "details": alert.get("details", ""),
         "original_key": original_key,
-        "detection_domain": "identity",
+        "detection_domain": row.get("detection_domain", "identity"),
+        "mitre_framework": alert.get("mitre_framework") or row.get("mitre_framework") or "enterprise",
     }
-    for field in ("mitre_technique", "mitre_framework", "mitre_tactic", "guardduty_type", "guardduty_severity"):
+    for field in ("mitre_technique", "mitre_framework", "mitre_tactic", "guardduty_type", "guardduty_severity", "namespace"):
         value = alert.get(field) or row.get(field)
         if value:
             item[field] = str(value)
@@ -254,7 +255,7 @@ def _process_guardduty_event(event: Dict[str, Any]) -> bool:
         "details": row["details"],
         "severity": row["severity"],
         "mitre_tactic": row.get("mitre_tactic"),
-        "mitre_framework": "enterprise",
+        "mitre_framework": row.get("mitre_framework", "enterprise"),
         "guardduty_type": row["guardduty_type"],
         "guardduty_severity": row["guardduty_severity"],
     }
