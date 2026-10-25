@@ -132,3 +132,48 @@ output "kubernetes_lambda_arn" {
   value       = aws_lambda_function.kubernetes.arn
   description = "ARN of the Kubernetes audit/Falco detection Lambda."
 }
+
+output "vulnerability_bucket_name" {
+  value       = aws_s3_bucket.telemetry_buckets["vulnerability"].bucket
+  description = "S3 bucket for Nessus/Qualys exports and the asset inventory."
+}
+
+output "vuln_queue_url" {
+  value       = aws_sqs_queue.vuln_ingest.id
+  description = "SQS queue carrying scanner exports to the vulnerability processor."
+}
+
+output "vulnerability_lambda_arn" {
+  value       = aws_lambda_function.vulnerability_processor.arn
+  description = "ARN of the vulnerability ingest processor Lambda."
+}
+
+output "vulnerability_report_lambda_arn" {
+  value       = aws_lambda_function.vulnerability_reporter.arn
+  description = "ARN of the vulnerability remediation reporter Lambda."
+}
+
+output "vuln_reports_topic_arn" {
+  value       = aws_sns_topic.vuln_reports.arn
+  description = "ARN of the SNS topic receiving remediation report summaries."
+}
+
+output "vuln_report_sink_url" {
+  value       = aws_sqs_queue.vuln_report_sink.id
+  description = "URL of the SQS queue subscribed to the vulnerability report topic (for LocalStack verification)."
+}
+
+output "vulnerability_table_name" {
+  value       = aws_dynamodb_table.vulnerabilities.name
+  description = "DynamoDB table holding normalized vulnerability findings."
+}
+
+output "vulnerability_cve_table_name" {
+  value       = aws_dynamodb_table.vulnerability_cves.name
+  description = "DynamoDB table indexing findings by CVE."
+}
+
+output "enrichment_cache_table_name" {
+  value       = aws_dynamodb_table.enrichment_cache.name
+  description = "DynamoDB table caching EPSS enrichment responses."
+}

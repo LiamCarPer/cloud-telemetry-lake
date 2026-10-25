@@ -10,13 +10,20 @@ data "archive_file" "lambda_zip" {
   #   "python",
   #   "python/**"
   # ]
+  #
+  # Bytecode is never needed at runtime and regenerating it would otherwise
+  # change the zip hash and redeploy every Lambda after each test run.
+  excludes = [
+    "**/__pycache__/**",
+    "**/*.pyc",
+  ]
 }
 
 resource "aws_s3_object" "lambda_zip_upload" {
-  bucket = aws_s3_bucket.telemetry_buckets["raw"].id
-  key    = "parser_lambda.zip"
-  source = data.archive_file.lambda_zip.output_path
-  etag   = filemd5(data.archive_file.lambda_zip.output_path)
+  bucket      = aws_s3_bucket.telemetry_buckets["raw"].id
+  key         = "parser_lambda.zip"
+  source      = data.archive_file.lambda_zip.output_path
+  source_hash = filemd5(data.archive_file.lambda_zip.output_path)
 }
 
 resource "aws_lambda_layer_version" "pandas_layer" {

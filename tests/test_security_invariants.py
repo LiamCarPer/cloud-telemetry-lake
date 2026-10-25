@@ -111,5 +111,62 @@ class TestKubernetesPlaneInvariants(unittest.TestCase):
                 self.assertIn(f'aws_cloudwatch_metric_alarm" "{alarm}"', kubernetes)
 
 
+class TestVulnerabilityPlaneInvariants(unittest.TestCase):
+    def setUp(self):
+        self.vulnerability = _read("vulnerability.tf")
+
+    def test_both_vulnerability_roles_have_permissions_boundary(self):
+        self.assertEqual(
+            self.vulnerability.count(
+                "permissions_boundary = aws_iam_policy.lambda_permissions_boundary.arn"
+            ),
+            2,
+        )
+
+    def test_lambdas_use_shared_artifact_and_separate_handlers(self):
+        self.assertIn('handler          = "vulnerability_handler.lambda_handler"', self.vulnerability)
+        self.assertIn(
+            'handler          = "vulnerability_report_handler.lambda_handler"',
+            self.vulnerability,
+        )
+        self.assertEqual(
+            self.vulnerability.count("aws_s3_object.lambda_zip_upload.key"), 2
+        )
+
+    def test_has_queue_dlq_and_alarms(self):
+        for resource in ("vuln_ingest", "vuln_dlq"):
+            with self.subTest(resource=resource):
+                self.assertIn(f'aws_sqs_queue" "{resource}"', self.vulnerability)
+        for alarm in (
+            "vuln_processor_errors",
+            "vuln_queue_age",
+            "vuln_dlq_depth",
+            "vuln_report_errors",
+        ):
+            with self.subTest(alarm=alarm):
+                self.assertIn(f'aws_cloudwatch_metric_alarm" "{alarm}"', self.vulnerability)
+
+    def test_report_schedule_is_gated(self):
+        variables = _read("variables.tf")
+        self.assertRegex(
+            variables, r'variable "enable_vuln_reports"[\s\S]*?default\s*=\s*false'
+        )
+        self.assertRegex(
+            self.vulnerability,
+            r'resource "aws_cloudwatch_event_rule" "vuln_report_schedule"[\s\S]*?count\s*=\s*var\.enable_vuln_reports',
+        )
+
+    def test_reporter_queries_status_index_without_scan(self):
+        self.assertIn('"dynamodb:Query"', self.vulnerability)
+        self.assertNotIn('"dynamodb:Scan"', self.vulnerability)
+        with open(
+            os.path.join(REPO_ROOT, "src", "parser_lambda", "vulnerability_report_handler.py"),
+            encoding="utf-8",
+        ) as handle:
+            reporter = handle.read()
+        self.assertIn('IndexName="status-index"', reporter)
+        self.assertNotIn(".scan(", reporter)
+
+
 if __name__ == "__main__":
     unittest.main()

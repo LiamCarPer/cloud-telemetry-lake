@@ -28,6 +28,7 @@ workloads without completing the production hardening items in
 | Monitoring | CloudWatch alarms for Lambda errors/throttles, queue age, and DLQ depth, routed to an operations SNS topic |
 | Identity | CloudTrail management-event rules and GuardDuty finding normalization feed the shared detections and NIST reports; the real services are gated because LocalStack does not implement them |
 | Kubernetes | Audit-log rules and Falco event normalization feed a dedicated detector; a kind audit lab proves the live path, while EKS managed logging is documented as a production integration |
+| Vulnerability management | Nessus/Qualys normalization, EPSS/KEV enrichment, explainable scoring and SLA dates, JSON/CSV/Markdown reports, and a gated daily reporter schedule; the reporter queries a GSI instead of scanning |
 | Pipeline | GitHub Actions pinned to commit SHAs, read-only token permissions, gitleaks, Checkov, Bandit, pip-audit, Dependabot, dependency review |
 
 ## Known limitations
@@ -41,6 +42,10 @@ workloads without completing the production hardening items in
   does not include admission policy, image scanning, network policy, service
   mesh or multi-cluster management. The kind audit lab is optional and manual;
   EKS managed audit-log delivery is documented, not built.
+- Vulnerability management depends on public EPSS/KEV feeds and a single S3
+  asset inventory. It does not include NVD/CPE fallback, CMDB sync, automatic
+  finding closure/reconciliation or patch automation. Missing EPSS scores are
+  flagged, not invented; cross-scanner dedup is a documented heuristic.
 - Security Hub, AWS Config, IAM Access Analyzer, SCPs and VPC endpoints remain
   out of scope and are documented as the production baseline.
 - LocalStack Community does not enforce IAM policies. Policies are reviewed,

@@ -37,20 +37,25 @@ for a production account.
 
 ## IAM design
 
-- Four execution roles: parser, aggregator, identity detector and Kubernetes
-  detector. The parser can read raw objects, write staged Parquet and DLQ
-  records, write detections, and read/update the state table. The aggregator can
-  read the detection stream, write reports and publish incident alerts. The
-  identity detector can read CloudTrail objects and consume the
-  identity/GuardDuty queues. The Kubernetes detector can read audit objects,
-  consume the K8s/Falco queues, write detections and stage Kubernetes records.
-- All four roles attach `ot-lambda-permissions-boundary`, a deny-by-default
+- Six execution roles: parser, aggregator, identity detector, Kubernetes
+  detector, vulnerability processor and vulnerability reporter. The parser can
+  read raw objects, write staged Parquet and DLQ records, write detections, and
+  read/update the state table. The aggregator can read the detection stream,
+  write reports and publish incident alerts. The identity detector can read
+  CloudTrail objects and consume the identity/GuardDuty queues. The Kubernetes
+  detector can read audit objects, consume the K8s/Falco queues, write
+  detections and stage Kubernetes records. The vulnerability processor can read
+  scanner/inventory objects, write staged/DLQ objects, and manage the
+  vulnerability/CVE/cache tables. The reporter can query the findings table and
+  `status-index`, write `remediation/*`, and publish to its topic.
+- All six roles attach `ot-lambda-permissions-boundary`, a deny-by-default
   ceiling that lists only the services and actions the functions need.
-- Log permissions are scoped to the four function log groups, not
+- Log permissions are scoped to the six function log groups, not
   `arn:aws:logs:*:*:*`.
 - `dynamodb:Scan` and `dynamodb:DeleteItem` were removed; the parser never
   used them. `dynamodb:BatchGetItem` was added because the state store does
-  use it (it was missing before).
+  use it (it was missing before). The vulnerability reporter uses
+  `dynamodb:Query` on `status-index`; a static test fails if `Scan` returns.
 - Queue/resource policies pin `aws:SourceArn` and `aws:SourceAccount`.
 - **Trust policies do not carry `aws:SourceAccount` conditions.** Lambda
   execution-role trust does not support those condition keys; adding them
@@ -77,12 +82,12 @@ for a production account.
 
 | Service | Configuration |
 | :-- | :-- |
-| S3 (raw, staged, reports, DLQ) | SSE-KMS with `alias/ot-telemetry`, bucket keys enabled |
-| SQS (ingest, ingest DLQ, aggregator DLQ) | SSE-KMS with the same CMK |
-| DynamoDB (detections, state) | SSE-KMS with the same CMK; PITR enabled |
+| S3 (raw, staged, reports, DLQ, identity, Kubernetes, vulnerability) | SSE-KMS with `alias/ot-telemetry`, bucket keys enabled |
+| SQS (ingest, ingest DLQ, aggregator DLQ, identity, GuardDuty, K8s, Falco, vulnerability) | SSE-KMS with the same CMK |
+| DynamoDB (detections, state, vulnerabilities, CVEs, enrichment cache) | SSE-KMS with the same CMK; PITR enabled |
 | CloudWatch Logs | CMK-encrypted log groups, 14-day retention |
 | Secrets Manager | CMK-encrypted secret |
-| SNS (incident, ops) | SSE with the AWS-managed SNS key |
+| SNS (incident, ops, vulnerability reports) | SSE with the AWS-managed SNS key |
 | Lambda environment variables | Encrypted with the CMK (`kms_key_arn`) |
 
 **Tradeoff:** one CMK keeps key-policy review simple in a lab. Production
@@ -98,6 +103,10 @@ deletion has a smaller blast radius.
 | `ot-aggregator-errors` | Detections are not becoming incident reports |
 | `ot-ingest-queue-age` | Oldest message older than 5 minutes |
 | `ot-ingest-dlq-depth` | Messages exhausted retries |
+| `ot-vuln-processor-errors` | Vulnerability processor failing; scanner findings may be lost |
+| `ot-vuln-queue-age` | Scanner exports waiting more than 10 minutes |
+| `ot-vuln-dlq-depth` | Vulnerability exports exhausted retries |
+| `ot-vuln-report-errors` | Remediation reporter failing; scheduled reports may not arrive |
 | Aggregator stream on-failure | Failed stream batches delivered to `ot-aggregator-dlq` |
 
 All alarms publish to `ot-ops-alerts`. Set `ops_alert_email` to receive mail
@@ -151,6 +160,44 @@ delivery can be proven without email credentials (`make alarm-test`).
 - **Not implemented:** admission policy (Kyverno/OPA), image scanning,
   network policy, service mesh, multi-cluster, live Falco DaemonSet.
 
+## Vulnerability management plane
+
+- **Ingestion:** Nessus `.nessus` XML and Qualys VM XML/JSON arrive in
+  `ot-vuln-raw-<account>` and flow through SQS to the vulnerability processor.
+  XML parsing rejects `<!DOCTYPE` and `<!ENTITY` declarations before calling
+  `ElementTree`, preventing external-entity expansion without adding a
+  dependency that is absent from the Lambda bundle.
+- **Normalization and dedup:** source rows are keyed by scanner, asset, plugin,
+  port and protocol. The report key is asset + primary CVE + port + protocol,
+  so the same issue from Nessus and Qualys becomes one remediation item with a
+  merged source list and evidence. Findings without a CVE or with different
+  ports remain separate; this is documented as a heuristic.
+- **Enrichment:** EPSS comes from FIRST with a DynamoDB TTL cache; KEV comes
+  from the public CISA catalog. Both calls fail open with a warning, and a
+  missing EPSS value is recorded as missing rather than fabricated. A missing
+  CVSS value is estimated from scanner severity and marked `cvss_estimated`.
+- **Scoring and SLA:** `40% CVSS + 30% EPSS + 30% asset criticality + 10%
+  KEV/exploit bonus`, buckets `CRITICAL >= 80`, `HIGH >= 60`, `MEDIUM >= 40`,
+  `LOW < 40`, and SLA due dates of 7/30/90/180 days. The score components are
+  stored on every finding so a prioritization decision can be explained.
+- **Lifecycle:** `first_seen` is the earliest scanner observation and never
+  moves forward; `last_seen` never moves backward; `accepted` and
+  `false_positive` statuses survive re-scans. Findings are never closed
+  automatically, and there is no reconciliation job.
+- **Storage and reporting:** findings live in `ot_vulnerabilities` with
+  `asset-index`, `priority-index`, `status-index` and `scan-index`; CVE lookup
+  is `ot_vulnerability_cves`; enrichment cache is `ot_enrichment_cache`.
+  The reporter queries `status-index` rather than scanning, writes
+  JSON/CSV/Markdown to the reports bucket, and publishes a summary to
+  `ot-vuln-reports`. The daily schedule is gated by `enable_vuln_reports`.
+- **IAM:** separate ingest and report roles, both with the permissions boundary.
+  The processor can read the scanner bucket, write staged/DLQ objects and
+  manage only the three vulnerability tables. The reporter can query the
+  findings table/index, write `remediation/*`, and publish to its topic.
+- **Not implemented:** NVD/CPE fallback, CMDB integration, automatic closure or
+  reconciliation, patch automation, and a scanner API pull. The inventory is a
+  single S3 CSV/JSON object.
+
 ## CI/CD supply chain
 
 - Every action is pinned to a **full commit SHA** with a version comment;
@@ -185,12 +232,14 @@ untested configuration, so it is listed here instead.
 ## Verification
 
 ```bash
-make test                 # 99 unit tests, including security invariants
+make test                 # 136 unit tests, including security invariants
 make validate             # terraform fmt/validate
 make security             # bandit, pip-audit, checkov
 make seed-secret          # requires ABUSEIPDB_API_KEY in the shell
 make identity-demo        # CloudTrail fixtures + a GuardDuty EventBridge event
 make k8s-demo             # Kubernetes audit + Falco fixtures
+make vuln-demo            # Nessus/Qualys + inventory fixtures
+make vuln-report          # JSON/CSV/Markdown remediation report
 aws --endpoint-url=http://localhost:4566 cloudwatch describe-alarms
 aws --endpoint-url=http://localhost:4566 secretsmanager describe-secret \
   --secret-id ot-telemetry/abuseipdb
@@ -204,8 +253,8 @@ reintroduced.
 ## Live verification (2026-10-25, LocalStack 4.14.0)
 
 - `terraform apply` completed with the security resources in place: KMS alias,
-  Secrets Manager secret, permissions boundary, 13 queues, 13 alarms, 4 Lambda
-  functions, 6 S3 buckets, encrypted log groups, S3 versioning/lifecycle, and
+  Secrets Manager secret, permissions boundary, 15 queues, 17 alarms, 6 Lambda
+  functions, 7 S3 buckets, encrypted log groups, S3 versioning/lifecycle, and
   SSE-KMS/SQS/DynamoDB settings.
 - The parser processed a gzipped Malcolm fixture (4 records → staged Parquet)
   and a sensor event that produced 2 detection records.
@@ -239,6 +288,16 @@ reintroduced.
   `K8S_CLUSTER_ADMIN_BINDING` detections. It exposed and fixed two tuning
   bugs: `kubectl exec` is logged with verb `get` and two stages sharing an
   `auditID`, and anonymous `/readyz` probes must be excluded.
+- `make vuln-demo` produced 9 normalized findings from the committed Nessus and
+  Qualys fixtures. The report contained 6 deduplicated remediation items:
+  4 critical, 2 high, 3 medium, 4 KEV-flagged, and 2 SLA breaches. Staged
+  Parquet landed under `vulnerabilities/scan_date=2026-10-25/source=nessus`
+  and `source=qualys`; the CVE table held 9 rows. A second upload with a later
+  date preserved `first_seen` (including Qualys `FIRST_FOUND`) and advanced
+  `last_seen`; no finding was closed. The deployed reporter wrote
+  `remediation/<id>/report.{json,csv,md}` plus `remediation/latest/` and SNS
+  delivered a `[VULN] 9 open / 4 critical / 2 high` summary to
+  `ot-vuln-report-sink`.
 
 **Not verified locally:** IAM policy enforcement (paid LocalStack feature),
 the CloudTrail, GuardDuty and EKS managed services (CloudTrail/GuardDuty are

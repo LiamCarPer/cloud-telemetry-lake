@@ -64,3 +64,15 @@ variable "enable_guardduty" {
   default     = false
 }
 
+variable "enable_vuln_reports" {
+  type        = bool
+  description = "Create the daily EventBridge schedule for the vulnerability remediation reporter. Leave false for LocalStack fixture tests and invoke the reporter directly."
+  default     = false
+}
+
+variable "vuln_report_email" {
+  type        = string
+  description = "Optional email address subscribed to the vulnerability remediation report topic. Leave empty to skip the subscription."
+  default     = ""
+}
+

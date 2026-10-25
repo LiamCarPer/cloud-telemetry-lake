@@ -374,6 +374,216 @@ resource "aws_glue_catalog_table" "incident_reports" {
   }
 }
 
+resource "aws_glue_catalog_table" "vulnerability_findings" {
+  count         = var.enable_analytics ? 1 : 0
+  name          = "vulnerability_findings"
+  database_name = aws_glue_catalog_database.ot_telemetry[0].name
+
+  table_type = "EXTERNAL_TABLE"
+
+  parameters = {
+    "classification"      = "parquet"
+    "EXTERNAL"            = "TRUE"
+    "parquet.compression" = "SNAPPY"
+  }
+
+  storage_descriptor {
+    location      = "s3://${aws_s3_bucket.telemetry_buckets["staged"].bucket}/vulnerabilities/"
+    input_format  = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat"
+    output_format = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat"
+
+    ser_de_info {
+      name                  = "parquet-serde"
+      serialization_library = "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe"
+      parameters = {
+        "serialization.format" = "1"
+      }
+    }
+
+    columns {
+      name = "finding_id"
+      type = "string"
+    }
+    columns {
+      name = "asset_vuln_key"
+      type = "string"
+    }
+    columns {
+      name = "scan_id"
+      type = "string"
+    }
+    columns {
+      name = "asset_id"
+      type = "string"
+    }
+    columns {
+      name = "hostname"
+      type = "string"
+    }
+    columns {
+      name = "ip"
+      type = "string"
+    }
+    columns {
+      name = "fqdn"
+      type = "string"
+    }
+    columns {
+      name = "os"
+      type = "string"
+    }
+    columns {
+      name = "plugin_id"
+      type = "string"
+    }
+    columns {
+      name = "title"
+      type = "string"
+    }
+    columns {
+      name = "description"
+      type = "string"
+    }
+    columns {
+      name = "solution"
+      type = "string"
+    }
+    columns {
+      name = "severity_source"
+      type = "string"
+    }
+    columns {
+      name = "cvss_score"
+      type = "double"
+    }
+    columns {
+      name = "cvss_vector"
+      type = "string"
+    }
+    columns {
+      name = "cvss_version"
+      type = "string"
+    }
+    columns {
+      name = "cvss_estimated"
+      type = "boolean"
+    }
+    columns {
+      name = "cve_ids"
+      type = "string"
+    }
+    columns {
+      name = "cwe_ids"
+      type = "string"
+    }
+    columns {
+      name = "exploit_available"
+      type = "boolean"
+    }
+    columns {
+      name = "patch_available"
+      type = "boolean"
+    }
+    columns {
+      name = "port"
+      type = "string"
+    }
+    columns {
+      name = "protocol"
+      type = "string"
+    }
+    columns {
+      name = "service"
+      type = "string"
+    }
+    columns {
+      name = "first_seen"
+      type = "string"
+    }
+    columns {
+      name = "last_seen"
+      type = "string"
+    }
+    columns {
+      name = "status"
+      type = "string"
+    }
+    columns {
+      name = "asset_criticality"
+      type = "bigint"
+    }
+    columns {
+      name = "criticality_source"
+      type = "string"
+    }
+    columns {
+      name = "epss_score"
+      type = "double"
+    }
+    columns {
+      name = "epss_percentile"
+      type = "double"
+    }
+    columns {
+      name = "epss_date"
+      type = "string"
+    }
+    columns {
+      name = "epss_missing"
+      type = "boolean"
+    }
+    columns {
+      name = "epss_stale"
+      type = "boolean"
+    }
+    columns {
+      name = "kev"
+      type = "boolean"
+    }
+    columns {
+      name = "kev_date"
+      type = "string"
+    }
+    columns {
+      name = "priority_score"
+      type = "double"
+    }
+    columns {
+      name = "priority_bucket"
+      type = "string"
+    }
+    columns {
+      name = "due_date"
+      type = "string"
+    }
+    columns {
+      name = "score_components"
+      type = "string"
+    }
+    columns {
+      name = "scoring_version"
+      type = "string"
+    }
+    columns {
+      name = "raw_ref"
+      type = "string"
+    }
+    columns {
+      name = "ingested_at"
+      type = "string"
+    }
+  }
+
+  partition_keys {
+    name = "scan_date"
+    type = "string"
+  }
+  partition_keys {
+    name = "source"
+    type = "string"
+  }
+}
+
 resource "aws_athena_workgroup" "ot_analytics" {
   count = var.enable_analytics ? 1 : 0
   name  = "ot_analytics"
@@ -641,5 +851,130 @@ FROM staged_telemetry
 WHERE source = 'falco'
   AND severity IN ('HIGH', 'MEDIUM')
 ORDER BY timestamp DESC;
+EOF
+}
+
+resource "aws_athena_named_query" "vuln_open_by_priority" {
+  count     = var.enable_analytics ? 1 : 0
+  name      = "vuln_open_by_priority"
+  workgroup = aws_athena_workgroup.ot_analytics[0].id
+  database  = aws_glue_catalog_database.ot_telemetry[0].name
+  query     = <<EOF
+SELECT
+  priority_bucket,
+  count(*) AS findings,
+  count(DISTINCT asset_id) AS assets,
+  round(avg(priority_score), 1) AS avg_score
+FROM vulnerability_findings
+WHERE status = 'open'
+GROUP BY priority_bucket
+ORDER BY avg_score DESC;
+EOF
+}
+
+resource "aws_athena_named_query" "vuln_top_remediation" {
+  count     = var.enable_analytics ? 1 : 0
+  name      = "vuln_top_remediation"
+  workgroup = aws_athena_workgroup.ot_analytics[0].id
+  database  = aws_glue_catalog_database.ot_telemetry[0].name
+  query     = <<EOF
+SELECT
+  finding_id,
+  priority_bucket,
+  priority_score,
+  asset_id,
+  hostname,
+  title,
+  cve_ids,
+  cvss_score,
+  epss_score,
+  kev,
+  due_date
+FROM vulnerability_findings
+WHERE status = 'open'
+ORDER BY priority_score DESC
+LIMIT 50;
+EOF
+}
+
+resource "aws_athena_named_query" "vuln_kev_exposure" {
+  count     = var.enable_analytics ? 1 : 0
+  name      = "vuln_kev_exposure"
+  workgroup = aws_athena_workgroup.ot_analytics[0].id
+  database  = aws_glue_catalog_database.ot_telemetry[0].name
+  query     = <<EOF
+SELECT
+  asset_id,
+  hostname,
+  title,
+  cve_ids,
+  kev_date,
+  priority_score,
+  due_date
+FROM vulnerability_findings
+WHERE status = 'open'
+  AND kev = true
+ORDER BY priority_score DESC;
+EOF
+}
+
+resource "aws_athena_named_query" "vuln_sla_breaches" {
+  count     = var.enable_analytics ? 1 : 0
+  name      = "vuln_sla_breaches"
+  workgroup = aws_athena_workgroup.ot_analytics[0].id
+  database  = aws_glue_catalog_database.ot_telemetry[0].name
+  query     = <<EOF
+SELECT
+  priority_bucket,
+  count(*) AS breaches,
+  min(due_date) AS oldest_due,
+  max(priority_score) AS max_score
+FROM vulnerability_findings
+WHERE status = 'open'
+  AND due_date < CAST(current_date AS varchar)
+GROUP BY priority_bucket
+ORDER BY max_score DESC;
+EOF
+}
+
+resource "aws_athena_named_query" "vuln_asset_risk" {
+  count     = var.enable_analytics ? 1 : 0
+  name      = "vuln_asset_risk"
+  workgroup = aws_athena_workgroup.ot_analytics[0].id
+  database  = aws_glue_catalog_database.ot_telemetry[0].name
+  query     = <<EOF
+SELECT
+  asset_id,
+  max(hostname) AS hostname,
+  max(asset_criticality) AS criticality,
+  count(*) AS findings,
+  sum(CASE WHEN priority_bucket = 'CRITICAL' THEN 1 ELSE 0 END) AS critical_findings,
+  max(priority_score) AS max_score
+FROM vulnerability_findings
+WHERE status = 'open'
+GROUP BY asset_id
+ORDER BY criticality DESC, max_score DESC;
+EOF
+}
+
+resource "aws_athena_named_query" "vuln_cve_prevalence" {
+  count     = var.enable_analytics ? 1 : 0
+  name      = "vuln_cve_prevalence"
+  workgroup = aws_athena_workgroup.ot_analytics[0].id
+  database  = aws_glue_catalog_database.ot_telemetry[0].name
+  query     = <<EOF
+SELECT
+  cve_id,
+  count(DISTINCT asset_id) AS assets,
+  count(*) AS findings,
+  max(priority_score) AS max_score,
+  max(CASE WHEN kev THEN 1 ELSE 0 END) AS kev
+FROM vulnerability_findings
+CROSS JOIN UNNEST(split(cve_ids, ',')) AS t(cve_id)
+WHERE status = 'open'
+  AND cve_ids <> ''
+GROUP BY cve_id
+ORDER BY assets DESC, max_score DESC
+LIMIT 50;
 EOF
 }

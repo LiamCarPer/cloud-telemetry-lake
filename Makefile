@@ -1,6 +1,6 @@
 PYTHON ?= $(shell if [ -x .venv/bin/python ]; then echo .venv/bin/python; else echo python3; fi)
 
-.PHONY: setup test fmt validate seed-secret security alarm-test identity-demo k8s-demo
+.PHONY: setup test fmt validate seed-secret security alarm-test identity-demo k8s-demo vuln-demo vuln-report
 
 setup:
 	$(PYTHON) -m pip install -r requirements-dev.txt
@@ -29,7 +29,7 @@ seed-secret:
 		--secret-string "{\"api_key\":\"$$ABUSEIPDB_API_KEY\"}"
 
 security:
-	bandit -q -r src/aggregator_lambda src/parser_lambda/handler.py src/parser_lambda/identity_handler.py src/parser_lambda/kubernetes_handler.py src/parser_lambda/log_parser_toolkit src/identity_fixture src/kubernetes_fixture
+	bandit -q -r src/aggregator_lambda src/parser_lambda/handler.py src/parser_lambda/identity_handler.py src/parser_lambda/kubernetes_handler.py src/parser_lambda/vulnerability_handler.py src/parser_lambda/vulnerability_report_handler.py src/parser_lambda/log_parser_toolkit src/identity_fixture src/kubernetes_fixture src/vulnerability_cli src/vulnerability_fixture
 	pip-audit -r requirements-dev.txt
 	checkov -d terraform --config-file .checkov.yaml --compact
 
@@ -58,3 +58,15 @@ identity-demo:
 k8s-demo:
 	$(PYTHON) src/kubernetes_fixture/upload_kubernetes_fixtures.py \
 		--endpoint-url $${AWS_ENDPOINT_URL:-http://localhost:4566}
+
+# Upload the asset inventory and Nessus/Qualys fixtures. The S3 notification
+# drives the vulnerability processor; run `make vuln-report` after it settles.
+vuln-demo:
+	$(PYTHON) src/vulnerability_fixture/upload_vulnerability_fixtures.py \
+		--endpoint-url $${AWS_ENDPOINT_URL:-http://localhost:4566}
+
+# Build JSON/CSV/Markdown remediation reports from the open findings.
+vuln-report:
+	$(PYTHON) src/vulnerability_cli/report.py \
+		--endpoint-url $${AWS_ENDPOINT_URL:-http://localhost:4566} \
+		--output-dir $${VULN_REPORT_DIR:-/tmp/opencode/vuln-report}

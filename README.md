@@ -60,6 +60,7 @@ graph TD
 *   **Analytical Storage:** Parsed logs staged as snappy-compressed Apache Parquet, partitioned by source and date.
 *   **Cloud Identity Detection Plane:** CloudTrail management events and GuardDuty findings feed a dedicated identity detector with seven CloudTrail rules, ATT&CK Enterprise tagging, and the same DynamoDB → NIST report → SNS path.
 *   **Kubernetes Detection Plane:** API-server audit logs and Falco runtime events feed a dedicated Kubernetes detector with eight audit rules, runtime normalization, ATT&CK for Containers tagging, and a reproducible kind audit lab.
+*   **Vulnerability Management Plane:** Nessus XML and Qualys XML/JSON exports are normalized, deduplicated across scanners, enriched with EPSS and CISA KEV, weighted by asset criticality, and written to DynamoDB and Parquet. A separate reporter produces JSON/CSV/Markdown remediation plans with SLA due dates and SNS summaries.
 *   **Security-Hardened Delivery:** CMK encryption for data, logs and secrets; Secrets Manager for the threat-intel key; scoped IAM with a permissions boundary; CloudWatch alarms on pipeline failure paths; and CI supply-chain scanning (gitleaks, Checkov, Bandit, pip-audit).
 
 ---
@@ -117,6 +118,28 @@ make k8s-demo
 
 ---
 
+## Vulnerability Management Plane
+
+The fourth plane turns scanner exports into a prioritized remediation queue:
+
+*   **Formats:** Nessus `.nessus` XML, Qualys VM XML and Qualys VM JSON. XML parsing uses the standard library with explicit DTD/entity rejection, so scanner input cannot expand external entities.
+*   **Normalization:** findings are keyed by source, asset, plugin, port and protocol. A cross-scanner key (`asset + primary CVE + port + protocol`) merges the same issue reported by Nessus and Qualys into one remediation item while preserving both `finding_ids` and `sources`.
+*   **Asset inventory:** a CSV or JSON object at `s3://ot-vuln-raw-<account>/inventory/assets.csv` supplies `asset_id`, hostname/IP/FQDN and criticality. Explicit criticality (1–5) wins; otherwise Purdue level or security zone derives it, with a default of 3. Unknown assets are flagged, not silently trusted.
+*   **Enrichment:** EPSS is fetched from FIRST with a DynamoDB TTL cache; CISA KEV is fetched from the public catalog. Missing EPSS is treated as 0 and counted in the report's data-quality block rather than invented.
+*   **Scoring:** `40% CVSS + 30% EPSS + 30% asset criticality + 10% KEV/exploit bonus`, normalized to 0–100. Buckets are `CRITICAL >= 80`, `HIGH >= 60`, `MEDIUM >= 40`, `LOW < 40`; SLA due dates are 7/30/90/180 days from `first_seen`.
+*   **Lifecycle:** `first_seen` is the earliest scanner observation and never moves forward; `last_seen` advances on every scan; analyst statuses `accepted` and `false_positive` survive re-scans. Findings are **never closed automatically**.
+*   **Storage:** `ot_vulnerabilities` (finding rows with `asset-index`, `priority-index`, `status-index` and `scan-index`), `ot_vulnerability_cves` (CVE → finding lookup) and `ot_enrichment_cache` (TTL). The processor also stages partitioned Parquet under `vulnerabilities/scan_date=<date>/source=<scanner>/`.
+*   **Reporting:** `ot-vulnerability-reporter` queries the `status-index` (never a table scan), writes `report.json`, `report.csv` and `report.md` under `remediation/<report_id>/` and `remediation/latest/`, and publishes a summary to `ot-vuln-reports`. The daily EventBridge schedule is gated by `enable_vuln_reports` (default `false`) so local demos invoke the reporter directly.
+
+```bash
+make vuln-demo     # upload inventory + Nessus/Qualys fixtures
+make vuln-report   # JSON/CSV/Markdown in /tmp/opencode/vuln-report
+```
+
+The committed fixtures produce 9 findings, 6 deduplicated remediation items, 4 critical items, and 2 KEV findings (Log4Shell and CVE-2024-3400). The live run also verified `first_seen` preservation and `last_seen` advancement across two scan dates.
+
+---
+
 ## Security Controls
 
 | Area | Implementation |
@@ -127,6 +150,7 @@ make k8s-demo
 | **Monitoring** | CloudWatch alarms for Lambda errors/throttles, ingest queue age and DLQ depth, routed to the `ot-ops-alerts` topic (set `ops_alert_email` to receive mail). |
 | **Identity detection** | CloudTrail and GuardDuty feed a dedicated identity Lambda; detections carry `detection_domain=identity`. The real trail/detector are gated because LocalStack does not implement them. |
 | **Kubernetes detection** | Audit logs and Falco events feed a dedicated Kubernetes Lambda; detections carry `detection_domain=kubernetes`. A kind audit lab proves the live path; EKS managed logging is documented as a production integration. |
+| **Vulnerability management** | Scanner exports feed a dedicated processor and reporter; EPSS/KEV enrichment, explainable scoring, SLA due dates, JSON/CSV/Markdown reports, and a gated daily schedule. The reporter queries a GSI instead of scanning DynamoDB. |
 | **Pipeline** | GitHub Actions pinned to commit SHAs, read-only token permissions, gitleaks secret scanning, Checkov for Terraform, Bandit for Python, pip-audit for dependencies, Dependabot and dependency review. |
 
 Control details, the threat model and residual risks are in [`docs/SECURITY.md`](docs/SECURITY.md); the disclosure policy is [`SECURITY.md`](SECURITY.md).
@@ -205,7 +229,7 @@ python3 src/malcolm_fixture/upload_malcolm_alerts.py --endpoint-url http://local
 python3 -m unittest discover -s tests -t . -v
 ```
 
-The suite covers the OT, identity and Kubernetes parsers; 7 OT, 7 identity and 8 Kubernetes rules; Falco/GuardDuty normalization; window expiry; the DynamoDB state-store update contract; SQS partial batch responses; secret loading; guard rails; ATT&CK framework grouping; and NIST report construction. It is 99 tests; `make test` runs the same command.
+The suite covers the OT, identity, Kubernetes and vulnerability parsers; 7 OT, 7 identity and 8 Kubernetes rules; Falco/GuardDuty normalization; vulnerability scoring, dedup, lifecycle and reporting; window expiry; the DynamoDB state-store update contract; SQS partial batch responses; secret loading; guard rails; ATT&CK framework grouping; and NIST report construction. It is 136 tests; `make test` runs the same command.
 
 ### 8. Run the Identity Demo
 
@@ -248,6 +272,22 @@ For a real API server, `lab/kubernetes/` contains the kind audit config, demo wo
 
 ---
 
+### 10. Run the Vulnerability Demo
+
+Uploads the asset inventory plus Nessus and Qualys fixtures. The S3 notification drives the processor; the reporter can then be run locally or invoked in Lambda:
+
+```bash
+make vuln-demo
+make vuln-report
+
+# Or invoke the deployed reporter (writes S3 + SNS):
+AWS_ACCESS_KEY_ID=mock AWS_SECRET_ACCESS_KEY=mock AWS_DEFAULT_REGION=us-east-1 \
+aws --endpoint-url=http://localhost:4566 lambda invoke \
+  --function-name ot-vulnerability-reporter --payload '{}' /tmp/vuln-report-response.json
+```
+
+---
+
 ## Analytics & Security Data Lake Querying
 
 ### 1. Production AWS Architecture (Athena & Glue)
@@ -256,11 +296,12 @@ In a production AWS environment, the structured telemetry and incident reports a
 - **Tables**:
   - `staged_telemetry`: An external snappy-parquet table mapped to `s3://ot-telemetry-staged-<account_id>/parsed/` partitioned by `date` (string) and `source` (string).
   - `incident_reports`: An external JSON table mapped to `s3://ot-telemetry-reports-<account_id>/incidents/` parsing incident reports structure.
+  - `vulnerability_findings`: An external snappy-parquet table mapped to `s3://ot-telemetry-staged-<account_id>/vulnerabilities/` partitioned by `scan_date` and `source`.
 
 *Note: Since Glue and Athena are premium APIs not implemented in the free LocalStack Community Edition, these resources are disabled by default in local deployments via the feature flag `enable_analytics = false`. Set this flag to `true` when deploying to a real AWS account.*
 
 ### 2. AWS Athena Named Queries
-Twelve production-ready analytical queries are pre-defined in the repository:
+Eighteen production-ready analytical queries are pre-defined in the repository:
 1. **High-Severity OT Anomalies Over Time**: Groups and aggregates high-severity alerts (`CROSS_ZONE_VIOLATION`, `UNAUTHORIZED_MODBUS_WRITE`, `OT_BRUTE_FORCE_SCAN`) by date and source.
 2. **Top Noisy Hosts**: Identifies the most active logging sources across the network.
 3. **SCADA TTP Patterns**: Parses nested Malcolm NDR JSON alerts, matching specific industrial attack signatures (e.g. Modbus function code violations, S7comm lateral movement).
@@ -273,6 +314,12 @@ Twelve production-ready analytical queries are pre-defined in the repository:
 10. **Kubernetes RBAC Changes**: Lists role/binding changes by actor.
 11. **Kubernetes Anonymous Access**: Finds successful anonymous requests outside health/discovery endpoints.
 12. **Falco High-Severity Events**: Groups runtime events by rule, priority, namespace and pod.
+13. **Open Vulnerabilities by Priority**: Counts open findings and affected assets per priority bucket, with average score.
+14. **Top Remediation Queue**: The highest-scoring open findings with CVE, CVSS, EPSS, KEV and due date.
+15. **KEV Exposure**: Open findings whose CVE is in the CISA KEV catalog.
+16. **Vulnerability SLA Breaches**: Open findings past their SLA due date, grouped by priority.
+17. **Asset Risk Ranking**: Open finding counts, critical counts and maximum score per asset.
+18. **CVE Prevalence**: Assets and findings per CVE, including KEV flags.
 
 ### 3. Local Analytics Query CLI
 To run these queries locally against the LocalStack emulation environment, a query client utility is provided. It uses `pandas` and `awswrangler` to run the identical SQL aggregates directly against the S3 staged parquet files:
@@ -282,6 +329,8 @@ AWS_ACCESS_KEY_ID=mock AWS_SECRET_ACCESS_KEY=mock AWS_DEFAULT_REGION=us-east-1 \
 AWS_ENDPOINT_URL=http://localhost:4566 \
 .venv/bin/python src/analytics/query_lake.py
 ```
+
+The CLI covers the eleven OT/identity/Kubernetes hunts. The six vulnerability Athena queries are declared in Terraform; the local remediation output is generated by `make vuln-report` (JSON/CSV/Markdown), not by this CLI.
 
 Example output (OT queries; identity and Kubernetes queries are additive):
 ```text
@@ -323,6 +372,11 @@ host_identifier  log_count
 *   **Kubernetes coverage is audit + runtime normalization, not a full platform.** Eight audit rules and Falco event normalization. No admission-controller policy, image scanning, network policy, service mesh, multi-cluster or EKS audit-log integration is implemented.
 *   **The Kubernetes lab is optional and manual.** `lab/kubernetes/` was used to verify a real kind audit log through Fluent Bit → LocalStack; it is not part of CI. The managed EKS audit-log path (CloudWatch Logs → Firehose → S3) is documented as a production integration, not built or exercised.
 *   **Falco is fixture/SQS-tested, not run live.** Falco owns the runtime rules; the repo normalizes and reports its events. A live Falco DaemonSet was not added because of eBPF/privilege and memory constraints in the lab.
+*   **Vulnerability enrichment depends on public feeds.** EPSS and the CISA KEV catalog are fetched at ingest time; there is no offline snapshot or NVD/CPE fallback. A missing EPSS score is treated as 0 and counted in `data_quality.epss_missing`, and a missing CVSS score is estimated from scanner severity and flagged with `cvss_estimated`.
+*   **Asset inventory is a single object.** There is no CMDB sync or per-asset API. Criticality comes from the CSV/JSON inventory at `inventory/assets.csv`, with Purdue/zone derivation and a default of 3 for unknown assets.
+*   **Vulnerability lifecycle is intentionally conservative.** `first_seen`/`last_seen`/triage status are merged, but there is no automatic closure, reconciliation, or patch automation. A finding disappears from the report only when its status is changed or the row is removed.
+*   **Cross-scanner dedup is heuristic.** The key is asset + primary CVE + port + protocol. Findings without a CVE, or the same CVE reported on different ports, remain separate; scanner plugin IDs are preserved on the source rows.
+*   **Vulnerability Athena resources are declarative.** The `vulnerability_findings` table and six queries are Terraform-validated but not executed locally because LocalStack Community does not implement Glue/Athena.
 *   **Security Hub, AWS Config, IAM Access Analyzer, SCPs and VPC endpoints remain out of scope.** [`docs/SECURITY.md`](docs/SECURITY.md) records them as the production baseline rather than claiming them.
 *   **Secret rotation is manual.** The key is read at cold start and cached; rotating it requires a new secret version and a forced cold start. There is no rotation Lambda.
 *   **One CMK covers data, logs and secrets.** This keeps key-policy review simple in the lab; production should split keys by data classification.
@@ -401,3 +455,17 @@ aws --endpoint-url=http://localhost:4566 dynamodb scan --table-name ot_detection
 ```
 
 Expected reasons: `K8S_POD_EXEC`, `K8S_PRIVILEGED_POD`, `K8S_SENSITIVE_HOSTPATH`, `K8S_CLUSTER_ADMIN_BINDING`, `K8S_SECRET_ACCESS`, `K8S_ANONYMOUS_ACCESS`, `K8S_ADMISSION_WEBHOOK_TAMPER` and `FALCO_TERMINAL_SHELL_IN_CONTAINER`. Staged partitions should include `source=k8s_audit/` and `source=falco/`; reports expose the `containers` ATT&CK framework. For a real API server, see `lab/kubernetes/README.md`.
+
+### 7. Vulnerability Findings and Remediation Report
+
+After `make vuln-demo`, expect 9 open findings and 6 deduplicated remediation items:
+
+```bash
+AWS_ACCESS_KEY_ID=mock AWS_SECRET_ACCESS_KEY=mock AWS_DEFAULT_REGION=us-east-1 \
+aws --endpoint-url=http://localhost:4566 dynamodb scan --table-name ot_vulnerabilities \
+  --select COUNT
+
+make vuln-report
+```
+
+Expected report summary: `CRITICAL 4, HIGH 2, MEDIUM 3, LOW 0`, `KEV 4`, and 2 SLA breaches. Staged partitions are under `vulnerabilities/scan_date=<date>/source=nessus|qualys/`. The deployed reporter writes `remediation/<report_id>/report.{json,csv,md}` and publishes a `[VULN]` summary to `ot-vuln-reports` (poll `ot-vuln-report-sink` to verify delivery). Re-uploading with a later date preserves `first_seen` and advances `last_seen`; no finding is closed automatically.

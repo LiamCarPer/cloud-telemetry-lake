@@ -3,12 +3,13 @@ data "aws_caller_identity" "current" {}
 locals {
   account_id = data.aws_caller_identity.current.account_id
   bucket_names = {
-    raw        = "ot-telemetry-raw-${local.account_id}"
-    staged     = "ot-telemetry-staged-${local.account_id}"
-    reports    = "ot-telemetry-reports-${local.account_id}"
-    dlq        = "ot-telemetry-dlq-${local.account_id}"
-    identity   = "ot-identity-raw-${local.account_id}"
-    kubernetes = "ot-k8s-raw-${local.account_id}"
+    raw           = "ot-telemetry-raw-${local.account_id}"
+    staged        = "ot-telemetry-staged-${local.account_id}"
+    reports       = "ot-telemetry-reports-${local.account_id}"
+    dlq           = "ot-telemetry-dlq-${local.account_id}"
+    identity      = "ot-identity-raw-${local.account_id}"
+    kubernetes    = "ot-k8s-raw-${local.account_id}"
+    vulnerability = "ot-vuln-raw-${local.account_id}"
   }
 }
 
@@ -148,6 +149,24 @@ resource "aws_s3_bucket_lifecycle_configuration" "kubernetes" {
 
     expiration {
       days = 180
+    }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "vulnerability" {
+  bucket = aws_s3_bucket.telemetry_buckets["vulnerability"].id
+
+  rule {
+    id     = "vulnerability-retention"
+    status = "Enabled"
+    filter {}
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+
+    expiration {
+      days = 365
     }
   }
 }
