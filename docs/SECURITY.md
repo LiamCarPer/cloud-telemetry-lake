@@ -253,7 +253,7 @@ reintroduced.
 ## Live verification (2026-10-25, LocalStack 4.14.0)
 
 - `terraform apply` completed with the security resources in place: KMS alias,
-  Secrets Manager secret, permissions boundary, 15 queues, 17 alarms, 6 Lambda
+  Secrets Manager secret, permissions boundary, 16 queues, 17 alarms, 6 Lambda
   functions, 7 S3 buckets, encrypted log groups, S3 versioning/lifecycle, and
   SSE-KMS/SQS/DynamoDB settings.
 - The parser processed a gzipped Malcolm fixture (4 records → staged Parquet)
