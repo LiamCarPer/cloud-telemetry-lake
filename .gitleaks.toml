@@ -2,10 +2,12 @@
 useDefault = true
 
 [allowlist]
-description = "LocalStack mock credentials and documentation examples"
+description = "LocalStack mock credentials, synthetic fixtures and documentation examples"
 paths = [
   '''README\.md''',
   '''docs/specs\.md''',
+  '''tests/fixtures/.*''',
+  '''lab/kubernetes/demo\.yaml''',
 ]
 regexes = [
   '''(?i)aws_access_key_id\s*=\s*["']?mock''',

@@ -59,6 +59,7 @@ graph TD
 *   **Automated Incident Response:** DynamoDB Streams trigger the aggregator Lambda to produce NIST SP 800-61 IR reports, grouped into deterministic `INCIDENT_WINDOW_SECONDS` windows so a retried stream batch regenerates the same report, and publish SOC alerts via SNS.
 *   **Analytical Storage:** Parsed logs staged as snappy-compressed Apache Parquet, partitioned by source and date.
 *   **Cloud Identity Detection Plane:** CloudTrail management events and GuardDuty findings feed a dedicated identity detector with seven CloudTrail rules, ATT&CK Enterprise tagging, and the same DynamoDB → NIST report → SNS path.
+*   **Kubernetes Detection Plane:** API-server audit logs and Falco runtime events feed a dedicated Kubernetes detector with eight audit rules, runtime normalization, ATT&CK for Containers tagging, and a reproducible kind audit lab.
 *   **Security-Hardened Delivery:** CMK encryption for data, logs and secrets; Secrets Manager for the threat-intel key; scoped IAM with a permissions boundary; CloudWatch alarms on pipeline failure paths; and CI supply-chain scanning (gitleaks, Checkov, Bandit, pip-audit).
 
 ---
@@ -100,6 +101,22 @@ make identity-demo
 
 ---
 
+## Kubernetes Detection Plane
+
+The third detection plane covers container and cluster activity:
+
+*   **Kubernetes audit logs:** API-server audit policy → Fluent Bit → `ot-k8s-raw` S3 → SQS → `ot-kubernetes-detector` → detections + staged Parquet. Eight rules cover pod exec/attach, privileged pods, sensitive hostPath mounts, cluster-admin bindings, secret access, anonymous access, RBAC changes and admission-webhook tampering.
+*   **Falco runtime events:** Falcosidekick → SQS → the same detector, normalized with rule, priority, namespace/pod/container, process, file and source IP. Falco owns the runtime rules; the pipeline owns normalization, severity, dedupe and reporting.
+*   **EKS:** GuardDuty EKS Runtime Monitoring findings already flow through the GuardDuty path and are tagged as Kubernetes/containers findings. The EKS audit-log CloudWatch path is documented as a production integration rather than emulated locally.
+*   **Shared model:** detections carry `detection_domain = "kubernetes"`; reports add a `containers` ATT&CK framework and a Kubernetes detection count.
+*   **Local lab:** `lab/kubernetes/` contains a kind cluster config with API-server audit logging, demo attack manifests and a Fluent Bit shipper. `make k8s-demo` exercises the same paths without a cluster.
+
+```bash
+make k8s-demo
+```
+
+---
+
 ## Security Controls
 
 | Area | Implementation |
@@ -109,6 +126,7 @@ make identity-demo
 | **Encryption** | SSE-KMS on S3, SQS and DynamoDB; CMK-encrypted CloudWatch Logs, Secrets Manager and Lambda environment variables; TLS-only S3 bucket policy and public-access blocks. |
 | **Monitoring** | CloudWatch alarms for Lambda errors/throttles, ingest queue age and DLQ depth, routed to the `ot-ops-alerts` topic (set `ops_alert_email` to receive mail). |
 | **Identity detection** | CloudTrail and GuardDuty feed a dedicated identity Lambda; detections carry `detection_domain=identity`. The real trail/detector are gated because LocalStack does not implement them. |
+| **Kubernetes detection** | Audit logs and Falco events feed a dedicated Kubernetes Lambda; detections carry `detection_domain=kubernetes`. A kind audit lab proves the live path; EKS managed logging is documented as a production integration. |
 | **Pipeline** | GitHub Actions pinned to commit SHAs, read-only token permissions, gitleaks secret scanning, Checkov for Terraform, Bandit for Python, pip-audit for dependencies, Dependabot and dependency review. |
 
 Control details, the threat model and residual risks are in [`docs/SECURITY.md`](docs/SECURITY.md); the disclosure policy is [`SECURITY.md`](SECURITY.md).
@@ -187,7 +205,7 @@ python3 src/malcolm_fixture/upload_malcolm_alerts.py --endpoint-url http://local
 python3 -m unittest discover -s tests -t . -v
 ```
 
-The suite covers the OT and identity parsers, the 7 OT rules plus 7 identity rules, window expiry, the DynamoDB state-store update contract, SQS partial batch responses, secret loading, guard rails, ATT&CK framework grouping, and NIST report construction. It is 78 tests; `make test` runs the same command.
+The suite covers the OT, identity and Kubernetes parsers; 7 OT, 7 identity and 8 Kubernetes rules; Falco/GuardDuty normalization; window expiry; the DynamoDB state-store update contract; SQS partial batch responses; secret loading; guard rails; ATT&CK framework grouping; and NIST report construction. It is 99 tests; `make test` runs the same command.
 
 ### 8. Run the Identity Demo
 
@@ -209,6 +227,25 @@ AWS_ACCESS_KEY_ID=mock AWS_SECRET_ACCESS_KEY=mock AWS_DEFAULT_REGION=us-east-1 \
 aws --endpoint-url=http://localhost:4566 s3 ls s3://ot-telemetry-staged-000000000000/parsed/ --recursive
 ```
 
+### 9. Run the Kubernetes Demo
+
+Uploads the committed audit EventList and sends a Falco event to the runtime queue:
+
+```bash
+make k8s-demo
+```
+
+Verify Kubernetes detections and staged partitions:
+
+```bash
+AWS_ACCESS_KEY_ID=mock AWS_SECRET_ACCESS_KEY=mock AWS_DEFAULT_REGION=us-east-1 \
+aws --endpoint-url=http://localhost:4566 dynamodb scan --table-name ot_detections \
+  --filter-expression 'detection_domain = :d' \
+  --expression-attribute-values '{":d":{"S":"kubernetes"}}'
+```
+
+For a real API server, `lab/kubernetes/` contains the kind audit config, demo workloads and Fluent Bit shipper; see `lab/kubernetes/README.md`.
+
 ---
 
 ## Analytics & Security Data Lake Querying
@@ -223,7 +260,7 @@ In a production AWS environment, the structured telemetry and incident reports a
 *Note: Since Glue and Athena are premium APIs not implemented in the free LocalStack Community Edition, these resources are disabled by default in local deployments via the feature flag `enable_analytics = false`. Set this flag to `true` when deploying to a real AWS account.*
 
 ### 2. AWS Athena Named Queries
-Seven production-ready analytical queries are pre-defined in the repository:
+Twelve production-ready analytical queries are pre-defined in the repository:
 1. **High-Severity OT Anomalies Over Time**: Groups and aggregates high-severity alerts (`CROSS_ZONE_VIOLATION`, `UNAUTHORIZED_MODBUS_WRITE`, `OT_BRUTE_FORCE_SCAN`) by date and source.
 2. **Top Noisy Hosts**: Identifies the most active logging sources across the network.
 3. **SCADA TTP Patterns**: Parses nested Malcolm NDR JSON alerts, matching specific industrial attack signatures (e.g. Modbus function code violations, S7comm lateral movement).
@@ -231,6 +268,11 @@ Seven production-ready analytical queries are pre-defined in the repository:
 5. **Identity Console Logins**: Shows console logins with MFA status and error codes.
 6. **GuardDuty Findings**: Groups findings by date, type and severity.
 7. **Identity/OT Source-IP Overlap**: Joins CloudTrail source addresses against OT detections to find identity activity originating from OT-network addresses.
+8. **Kubernetes Exec/Attach**: Lists pod exec and attach requests with user, namespace and source IP.
+9. **Kubernetes Privileged Workloads**: Finds privileged pods and sensitive hostPath mounts from the request object.
+10. **Kubernetes RBAC Changes**: Lists role/binding changes by actor.
+11. **Kubernetes Anonymous Access**: Finds successful anonymous requests outside health/discovery endpoints.
+12. **Falco High-Severity Events**: Groups runtime events by rule, priority, namespace and pod.
 
 ### 3. Local Analytics Query CLI
 To run these queries locally against the LocalStack emulation environment, a query client utility is provided. It uses `pandas` and `awswrangler` to run the identical SQL aggregates directly against the S3 staged parquet files:
@@ -241,7 +283,7 @@ AWS_ENDPOINT_URL=http://localhost:4566 \
 .venv/bin/python src/analytics/query_lake.py
 ```
 
-Example output (OT queries; identity queries are additive):
+Example output (OT queries; identity and Kubernetes queries are additive):
 ```text
 --- Security Data Lake Analytics CLI ---
 Reading telemetry from s3://ot-telemetry-staged-000000000000/parsed/ (Endpoint: http://localhost:4566)...
@@ -278,6 +320,9 @@ host_identifier  log_count
 *   **IAM enforcement is not exercised locally.** LocalStack Community does not evaluate IAM policies. The policies are reviewed, linted and unit-guarded, but their enforcement must be verified in a real AWS account.
 *   **CloudTrail and GuardDuty services are gated.** LocalStack Community does not implement CloudTrail (Ultimate-only) or GuardDuty, so the trail and detector default to off (`enable_cloudtrail`, `enable_guardduty`). The identity ingestion paths are verified with committed CloudTrail fixtures through S3 and GuardDuty-shaped events through EventBridge; the real services are Terraform-validated, not exercised locally.
 *   **Identity detection content is intentionally small.** Seven CloudTrail management-event rules plus GuardDuty finding normalization. There is no benign baseline or measured false-positive rate, and data events are excluded to control cost and volume.
+*   **Kubernetes coverage is audit + runtime normalization, not a full platform.** Eight audit rules and Falco event normalization. No admission-controller policy, image scanning, network policy, service mesh, multi-cluster or EKS audit-log integration is implemented.
+*   **The Kubernetes lab is optional and manual.** `lab/kubernetes/` was used to verify a real kind audit log through Fluent Bit → LocalStack; it is not part of CI. The managed EKS audit-log path (CloudWatch Logs → Firehose → S3) is documented as a production integration, not built or exercised.
+*   **Falco is fixture/SQS-tested, not run live.** Falco owns the runtime rules; the repo normalizes and reports its events. A live Falco DaemonSet was not added because of eBPF/privilege and memory constraints in the lab.
 *   **Security Hub, AWS Config, IAM Access Analyzer, SCPs and VPC endpoints remain out of scope.** [`docs/SECURITY.md`](docs/SECURITY.md) records them as the production baseline rather than claiming them.
 *   **Secret rotation is manual.** The key is read at cold start and cached; rotating it requires a new secret version and a forced cold start. There is no rotation Lambda.
 *   **One CMK covers data, logs and secrets.** This keeps key-policy review simple in the lab; production should split keys by data classification.
@@ -343,3 +388,16 @@ aws --endpoint-url=http://localhost:4566 dynamodb scan --table-name ot_detection
 ```
 
 Expected reasons include `IDENTITY_ROOT_ACCOUNT_USAGE`, `IDENTITY_CONSOLE_LOGIN_WITHOUT_MFA`, `IDENTITY_ACCESS_KEY_CREATED`, `IDENTITY_CLOUDTRAIL_TAMPERING`, `IDENTITY_CONSOLE_LOGIN_BRUTE_FORCE`, and a `GUARDDUTY_*` finding. Staged partitions should include `source=cloudtrail/` and `source=guardduty/`; reports expose `mitre_techniques_by_framework` with the Enterprise techniques and a separate `mitre_tactics` list.
+
+### 6. Kubernetes Detections
+
+After `make k8s-demo`, expect Kubernetes rows in `ot_detections` with `detection_domain=kubernetes`:
+
+```bash
+AWS_ACCESS_KEY_ID=mock AWS_SECRET_ACCESS_KEY=mock AWS_DEFAULT_REGION=us-east-1 \
+aws --endpoint-url=http://localhost:4566 dynamodb scan --table-name ot_detections \
+  --filter-expression 'detection_domain = :d' \
+  --expression-attribute-values '{":d":{"S":"kubernetes"}}'
+```
+
+Expected reasons: `K8S_POD_EXEC`, `K8S_PRIVILEGED_POD`, `K8S_SENSITIVE_HOSTPATH`, `K8S_CLUSTER_ADMIN_BINDING`, `K8S_SECRET_ACCESS`, `K8S_ANONYMOUS_ACCESS`, `K8S_ADMISSION_WEBHOOK_TAMPER` and `FALCO_TERMINAL_SHELL_IN_CONTAINER`. Staged partitions should include `source=k8s_audit/` and `source=falco/`; reports expose the `containers` ATT&CK framework. For a real API server, see `lab/kubernetes/README.md`.

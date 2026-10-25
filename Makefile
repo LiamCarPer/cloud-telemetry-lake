@@ -1,6 +1,6 @@
 PYTHON ?= $(shell if [ -x .venv/bin/python ]; then echo .venv/bin/python; else echo python3; fi)
 
-.PHONY: setup test fmt validate seed-secret security alarm-test identity-demo
+.PHONY: setup test fmt validate seed-secret security alarm-test identity-demo k8s-demo
 
 setup:
 	$(PYTHON) -m pip install -r requirements-dev.txt
@@ -29,7 +29,7 @@ seed-secret:
 		--secret-string "{\"api_key\":\"$$ABUSEIPDB_API_KEY\"}"
 
 security:
-	bandit -q -r src/aggregator_lambda src/parser_lambda/handler.py src/parser_lambda/identity_handler.py src/parser_lambda/log_parser_toolkit src/identity_fixture
+	bandit -q -r src/aggregator_lambda src/parser_lambda/handler.py src/parser_lambda/identity_handler.py src/parser_lambda/kubernetes_handler.py src/parser_lambda/log_parser_toolkit src/identity_fixture src/kubernetes_fixture
 	pip-audit -r requirements-dev.txt
 	checkov -d terraform --config-file .checkov.yaml --compact
 
@@ -52,4 +52,9 @@ alarm-test:
 # a GuardDuty finding through EventBridge->SQS->Lambda.
 identity-demo:
 	$(PYTHON) src/identity_fixture/upload_identity_fixtures.py \
+		--endpoint-url $${AWS_ENDPOINT_URL:-http://localhost:4566}
+
+# Exercise the Kubernetes plane with an audit EventList and a Falco event.
+k8s-demo:
+	$(PYTHON) src/kubernetes_fixture/upload_kubernetes_fixtures.py \
 		--endpoint-url $${AWS_ENDPOINT_URL:-http://localhost:4566}

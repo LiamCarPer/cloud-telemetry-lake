@@ -29,6 +29,7 @@ for a production account.
 | API key visible in Terraform state or Lambda env | Secret *container* only in Terraform; Lambda receives the secret ARN; value set out of band | Anyone with `lambda:GetFunctionConfiguration` sees the ARN, not the value; state does not contain the key |
 | Stolen Lambda credentials | Scoped identity policies + permissions boundary; no `Scan`, `DeleteItem`, wildcard logs or unused bucket reads | LocalStack does not enforce IAM; production must verify with IAM Access Analyzer / policy simulator |
 | Identity attack (root use, no-MFA login, key creation, IAM changes, log tampering) | CloudTrail management-event rules and GuardDuty finding normalization feed the same detections and NIST reports | Seven management-event rules only; no data events or benign baseline; CloudTrail/GuardDuty services are not exercised locally |
+| Kubernetes identity/runtime attack (exec, privileged pods, RBAC escalation, runtime shell) | Audit-log rules, Falco event normalization and a kind audit lab feed the same detections/reports | Eight audit rules; no admission/posture; Falco is fixture/SQS-tested; EKS managed audit delivery is documented only |
 | Data at rest read from S3/SQS/DynamoDB | SSE-KMS with a CMK; bucket public-access block; TLS-only bucket policy | One CMK for the lab; production should split data/logs/secrets keys |
 | Poison message loops forever | SQS redrive after 3 receives; aggregator stream retries capped at 3 with bisect + on-failure DLQ | Parser's S3 DLQ stores unparseable lines but does not alarm directly; DLQ depth alarm covers SQS |
 | Pipeline silently stops | Alarms on Lambda errors/throttles, queue age, DLQ depth → ops SNS topic | No paging integration in the lab; email subscription is optional |
@@ -36,15 +37,16 @@ for a production account.
 
 ## IAM design
 
-- Three execution roles: parser, aggregator and identity detector. The parser
-  can read raw objects, write staged Parquet and DLQ records, write detections,
-  and read/update the state table. The aggregator can read the detection stream,
-  write reports and publish incident alerts. The identity detector can read
-  CloudTrail objects and consume the identity/GuardDuty queues, write
-  detections and stage identity records.
-- All three roles attach `ot-lambda-permissions-boundary`, a deny-by-default
+- Four execution roles: parser, aggregator, identity detector and Kubernetes
+  detector. The parser can read raw objects, write staged Parquet and DLQ
+  records, write detections, and read/update the state table. The aggregator can
+  read the detection stream, write reports and publish incident alerts. The
+  identity detector can read CloudTrail objects and consume the
+  identity/GuardDuty queues. The Kubernetes detector can read audit objects,
+  consume the K8s/Falco queues, write detections and stage Kubernetes records.
+- All four roles attach `ot-lambda-permissions-boundary`, a deny-by-default
   ceiling that lists only the services and actions the functions need.
-- Log permissions are scoped to the three function log groups, not
+- Log permissions are scoped to the four function log groups, not
   `arn:aws:logs:*:*:*`.
 - `dynamodb:Scan` and `dynamodb:DeleteItem` were removed; the parser never
   used them. `dynamodb:BatchGetItem` was added because the state store does
@@ -125,6 +127,30 @@ delivery can be proven without email credentials (`make alarm-test`).
   GuardDuty-shaped `put-events` call. The trail/detector resources are
   Terraform-validated only.
 
+## Kubernetes detection plane
+
+- **Audit logs:** API-server audit policy → Fluent Bit → `ot-k8s-raw-<account>`
+  → SQS → Kubernetes Lambda. Eight rules cover exec/attach, privileged pods,
+  sensitive hostPath mounts, cluster-admin bindings, secret access,
+  service-account tokens, anonymous access, RBAC changes and admission-webhook
+  tampering.
+- **Runtime:** Falco/Falcosidekick JSON → SQS → the same Lambda. Falco owns the
+  runtime rules; the pipeline normalizes rule/priority/namespace/pod/process
+  and maps selected rules to ATT&CK for Containers techniques.
+- **EKS:** GuardDuty EKS Runtime Monitoring findings flow through the existing
+  GuardDuty path and are tagged `kubernetes` / `containers`. EKS audit-log
+  delivery through CloudWatch Logs → Firehose is documented as a production
+  integration, not built locally.
+- **Lab proof:** `lab/kubernetes/` runs a kind cluster with API-server audit
+  logging, demo attack manifests and a Fluent Bit S3 shipper. The live run
+  produced exec, secret, privileged-pod, hostPath, cluster-admin and
+  service-account-token detections. It also exposed two tuning bugs:
+  `kubectl exec` is logged with verb `get` and two stages per `auditID`, and
+  anonymous `/readyz` probes must be excluded. Both are fixed and
+  regression-tested.
+- **Not implemented:** admission policy (Kyverno/OPA), image scanning,
+  network policy, service mesh, multi-cluster, live Falco DaemonSet.
+
 ## CI/CD supply chain
 
 - Every action is pinned to a **full commit SHA** with a version comment;
@@ -147,6 +173,9 @@ untested configuration, so it is listed here instead.
 | Control | Why it is missing here |
 | :-- | :-- |
 | Security Hub, AWS Config rules, IAM Access Analyzer | Not implemented by LocalStack Community; require a real account |
+| EKS audit-log delivery (CloudWatch Logs → Firehose → S3) | Documented production integration; no EKS cluster is created. |
+| Admission policy (Kyverno/OPA) and posture (kube-bench/Trivy/Kubescape) | Separate preventive/posture products; out of scope for this detection plane. |
+| Live Falco/Tetragon DaemonSet | Falco events are fixture/SQS-tested; a live eBPF DaemonSet was not added. |
 | SCP guardrails and permission-set boundaries | Organizations-level, outside a single lab account |
 | VPC endpoints for S3/SQS/DynamoDB/Secrets Manager | Lambda runs outside a VPC in the lab |
 | AWS WAF / public ingress controls | No public ingress exists |
@@ -156,11 +185,12 @@ untested configuration, so it is listed here instead.
 ## Verification
 
 ```bash
-make test                 # 78 unit tests, including security invariants
+make test                 # 99 unit tests, including security invariants
 make validate             # terraform fmt/validate
 make security             # bandit, pip-audit, checkov
 make seed-secret          # requires ABUSEIPDB_API_KEY in the shell
 make identity-demo        # CloudTrail fixtures + a GuardDuty EventBridge event
+make k8s-demo             # Kubernetes audit + Falco fixtures
 aws --endpoint-url=http://localhost:4566 cloudwatch describe-alarms
 aws --endpoint-url=http://localhost:4566 secretsmanager describe-secret \
   --secret-id ot-telemetry/abuseipdb
@@ -171,11 +201,12 @@ wildcard log resource, `dynamodb:Scan`/`DeleteItem`, a plaintext secret
 variable, a missing permissions boundary, or a missing failure alarm is
 reintroduced.
 
-## Live verification (2026-10-24, LocalStack 4.14.0)
+## Live verification (2026-10-25, LocalStack 4.14.0)
 
 - `terraform apply` completed with the security resources in place: KMS alias,
-  Secrets Manager secret, permissions boundary, 9 queues, 9 alarms, encrypted
-  log groups, S3 versioning/lifecycle, and SSE-KMS/SQS/DynamoDB settings.
+  Secrets Manager secret, permissions boundary, 13 queues, 13 alarms, 4 Lambda
+  functions, 6 S3 buckets, encrypted log groups, S3 versioning/lifecycle, and
+  SSE-KMS/SQS/DynamoDB settings.
 - The parser processed a gzipped Malcolm fixture (4 records → staged Parquet)
   and a sensor event that produced 2 detection records.
 - The aggregator produced deterministic, window-anchored reports. The verified
@@ -197,9 +228,21 @@ reintroduced.
 - The state-store live run exposed and fixed a real bug: `ttl` is a DynamoDB
   reserved word, so the original `SET ttl = :ttl` update failed silently. It now
   uses `ExpressionAttributeNames` (`#ttl`, `#hits`) with a regression test.
+- `make k8s-demo` produced 9 Kubernetes detections: 7 audit rules, 1 Falco
+  runtime event and 1 GuardDuty EKS finding. Staged partitions included
+  `source=k8s_audit`, `source=falco` and `source=guardduty`; the audit report
+  exposed `containers` techniques `T1098`, `T1552.007`, `T1562.001`, `T1609`,
+  `T1611` with tactics `TA0001`–`TA0006`.
+- The optional kind lab shipped a real API-server audit log through Fluent Bit
+  to S3 and produced live `K8S_POD_EXEC`, `K8S_SECRET_ACCESS`,
+  `K8S_PRIVILEGED_POD`, `K8S_SENSITIVE_HOSTPATH` and
+  `K8S_CLUSTER_ADMIN_BINDING` detections. It exposed and fixed two tuning
+  bugs: `kubectl exec` is logged with verb `get` and two stages sharing an
+  `auditID`, and anonymous `/readyz` probes must be excluded.
 
 **Not verified locally:** IAM policy enforcement (paid LocalStack feature),
-the CloudTrail and GuardDuty services themselves (gated; their ingestion paths
-are fixture/EventBridge-tested), DynamoDB PITR status/restore, and the other
-production-baseline services. These remain stated limitations rather than
-claims.
+the CloudTrail, GuardDuty and EKS managed services (CloudTrail/GuardDuty are
+gated and fixture/EventBridge-tested; EKS audit-log delivery is documented
+only), live Falco/Tetragon, admission policy/posture tooling, DynamoDB PITR
+status/restore, and the other production-baseline services. These remain stated
+limitations rather than claims.
