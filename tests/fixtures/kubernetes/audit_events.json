@@ -1,0 +1,221 @@
+{
+  "kind": "EventList",
+  "apiVersion": "audit.k8s.io/v1",
+  "metadata": {},
+  "items": [
+    {
+      "kind": "Event",
+      "apiVersion": "audit.k8s.io/v1",
+      "auditID": "audit-exec-1",
+      "stage": "ResponseComplete",
+      "requestURI": "/api/v1/namespaces/default/pods/web-0/exec?command=sh",
+      "verb": "create",
+      "user": {
+        "username": "kubernetes-admin",
+        "groups": ["system:masters", "system:authenticated"]
+      },
+      "sourceIPs": ["172.18.0.1"],
+      "userAgent": "kubectl/v1.30.0",
+      "objectRef": {
+        "resource": "pods",
+        "namespace": "default",
+        "name": "web-0",
+        "subresource": "exec",
+        "apiVersion": "v1"
+      },
+      "responseStatus": {"code": 101},
+      "requestReceivedTimestamp": "2026-10-25T10:00:00Z",
+      "stageTimestamp": "2026-10-25T10:00:01Z",
+      "requestObject": {}
+    },
+    {
+      "kind": "Event",
+      "apiVersion": "audit.k8s.io/v1",
+      "auditID": "audit-privileged-1",
+      "stage": "ResponseComplete",
+      "verb": "create",
+      "user": {
+        "username": "developer",
+        "groups": ["system:authenticated"]
+      },
+      "sourceIPs": ["172.18.0.2"],
+      "userAgent": "kubectl/v1.30.0",
+      "objectRef": {
+        "resource": "pods",
+        "namespace": "default",
+        "name": "evil",
+        "apiVersion": "v1"
+      },
+      "responseStatus": {"code": 201},
+      "requestReceivedTimestamp": "2026-10-25T10:01:00Z",
+      "stageTimestamp": "2026-10-25T10:01:01Z",
+      "requestObject": {
+        "kind": "Pod",
+        "metadata": {"name": "evil", "namespace": "default"},
+        "spec": {
+          "hostPID": true,
+          "containers": [
+            {
+              "name": "shell",
+              "image": "alpine:3.20",
+              "securityContext": {"privileged": true}
+            }
+          ]
+        }
+      }
+    },
+    {
+      "kind": "Event",
+      "apiVersion": "audit.k8s.io/v1",
+      "auditID": "audit-hostpath-1",
+      "stage": "ResponseComplete",
+      "verb": "create",
+      "user": {
+        "username": "developer",
+        "groups": ["system:authenticated"]
+      },
+      "sourceIPs": ["172.18.0.2"],
+      "userAgent": "kubectl/v1.30.0",
+      "objectRef": {
+        "resource": "pods",
+        "namespace": "default",
+        "name": "hostpath",
+        "apiVersion": "v1"
+      },
+      "responseStatus": {"code": 201},
+      "requestReceivedTimestamp": "2026-10-25T10:02:00Z",
+      "stageTimestamp": "2026-10-25T10:02:01Z",
+      "requestObject": {
+        "kind": "Pod",
+        "metadata": {"name": "hostpath", "namespace": "default"},
+        "spec": {
+          "containers": [{"name": "nginx", "image": "nginx:1.27"}],
+          "volumes": [
+            {
+              "name": "docker",
+              "hostPath": {"path": "/var/run/docker.sock"}
+            }
+          ]
+        }
+      }
+    },
+    {
+      "kind": "Event",
+      "apiVersion": "audit.k8s.io/v1",
+      "auditID": "audit-rbac-1",
+      "stage": "ResponseComplete",
+      "verb": "create",
+      "user": {
+        "username": "developer",
+        "groups": ["system:authenticated"]
+      },
+      "sourceIPs": ["172.18.0.2"],
+      "userAgent": "kubectl/v1.30.0",
+      "objectRef": {
+        "resource": "clusterrolebindings",
+        "name": "escalate",
+        "apiVersion": "rbac.authorization.k8s.io/v1"
+      },
+      "responseStatus": {"code": 201},
+      "requestReceivedTimestamp": "2026-10-25T10:03:00Z",
+      "stageTimestamp": "2026-10-25T10:03:01Z",
+      "requestObject": {
+        "kind": "ClusterRoleBinding",
+        "metadata": {"name": "escalate"},
+        "roleRef": {"name": "cluster-admin"}
+      }
+    },
+    {
+      "kind": "Event",
+      "apiVersion": "audit.k8s.io/v1",
+      "auditID": "audit-secret-1",
+      "stage": "ResponseComplete",
+      "verb": "get",
+      "user": {
+        "username": "system:serviceaccount:default:viewer",
+        "groups": ["system:serviceaccounts", "system:authenticated"]
+      },
+      "sourceIPs": ["10.244.0.7"],
+      "userAgent": "kubectl/v1.30.0",
+      "objectRef": {
+        "resource": "secrets",
+        "namespace": "default",
+        "name": "db-creds",
+        "apiVersion": "v1"
+      },
+      "responseStatus": {"code": 200},
+      "requestReceivedTimestamp": "2026-10-25T10:04:00Z",
+      "stageTimestamp": "2026-10-25T10:04:01Z",
+      "requestObject": {"metadata": {"name": "db-creds"}},
+      "responseObject": {"data": {"password": "should-not-be-stored"}}
+    },
+    {
+      "kind": "Event",
+      "apiVersion": "audit.k8s.io/v1",
+      "auditID": "audit-anon-1",
+      "stage": "ResponseComplete",
+      "requestURI": "/api/v1/namespaces/default/pods",
+      "verb": "list",
+      "user": {
+        "username": "system:anonymous",
+        "groups": ["system:unauthenticated"]
+      },
+      "sourceIPs": ["203.0.113.44"],
+      "userAgent": "curl/8.5.0",
+      "objectRef": {
+        "resource": "pods",
+        "namespace": "default",
+        "apiVersion": "v1"
+      },
+      "responseStatus": {"code": 200},
+      "requestReceivedTimestamp": "2026-10-25T10:05:00Z",
+      "stageTimestamp": "2026-10-25T10:05:01Z",
+      "requestObject": {}
+    },
+    {
+      "kind": "Event",
+      "apiVersion": "audit.k8s.io/v1",
+      "auditID": "audit-webhook-1",
+      "stage": "ResponseComplete",
+      "verb": "update",
+      "user": {
+        "username": "developer",
+        "groups": ["system:authenticated"]
+      },
+      "sourceIPs": ["172.18.0.2"],
+      "userAgent": "kubectl/v1.30.0",
+      "objectRef": {
+        "resource": "validatingwebhookconfigurations",
+        "name": "policy-webhook",
+        "apiVersion": "admissionregistration.k8s.io/v1"
+      },
+      "responseStatus": {"code": 200},
+      "requestReceivedTimestamp": "2026-10-25T10:06:00Z",
+      "stageTimestamp": "2026-10-25T10:06:01Z",
+      "requestObject": {"webhooks": []}
+    },
+    {
+      "kind": "Event",
+      "apiVersion": "audit.k8s.io/v1",
+      "auditID": "audit-benign-1",
+      "stage": "ResponseComplete",
+      "verb": "get",
+      "user": {
+        "username": "system:serviceaccount:default:viewer",
+        "groups": ["system:serviceaccounts", "system:authenticated"]
+      },
+      "sourceIPs": ["10.244.0.7"],
+      "userAgent": "kubectl/v1.30.0",
+      "objectRef": {
+        "resource": "pods",
+        "namespace": "default",
+        "name": "web-0",
+        "apiVersion": "v1"
+      },
+      "responseStatus": {"code": 200},
+      "requestReceivedTimestamp": "2026-10-25T10:07:00Z",
+      "stageTimestamp": "2026-10-25T10:07:01Z",
+      "requestObject": {}
+    }
+  ]
+}

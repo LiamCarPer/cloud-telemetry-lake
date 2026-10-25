@@ -73,6 +73,11 @@ class TestHandlerLogic(unittest.TestCase):
 class TestHandlerBatchFailures(unittest.TestCase):
     """SQS partial batch response behaviour (ReportBatchItemFailures)."""
 
+    def setUp(self):
+        patcher = patch.object(handler, "RAW_BUCKET", "raw")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def _sqs_event(self, body, message_id):
         return {"Records": [{"messageId": message_id, "body": body}]}
 

@@ -88,5 +88,28 @@ class TestIdentityPlaneInvariants(unittest.TestCase):
         self.assertIn("aws_s3_object.lambda_zip_upload.key", identity)
 
 
+class TestKubernetesPlaneInvariants(unittest.TestCase):
+    def test_kubernetes_role_has_permissions_boundary(self):
+        kubernetes = _read("kubernetes.tf")
+        self.assertIn(
+            "permissions_boundary = aws_iam_policy.lambda_permissions_boundary.arn",
+            kubernetes,
+        )
+
+    def test_kubernetes_lambda_uses_shared_artifact_and_handler(self):
+        kubernetes = _read("kubernetes.tf")
+        self.assertIn('handler          = "kubernetes_handler.lambda_handler"', kubernetes)
+        self.assertIn("aws_s3_object.lambda_zip_upload.key", kubernetes)
+
+    def test_kubernetes_has_queue_dlq_and_alarms(self):
+        kubernetes = _read("kubernetes.tf")
+        for resource in ("k8s_ingest", "k8s_dlq", "falco_events", "falco_dlq"):
+            with self.subTest(resource=resource):
+                self.assertIn(f'aws_sqs_queue" "{resource}"', kubernetes)
+        for alarm in ("kubernetes_errors", "k8s_queue_age", "k8s_dlq_depth", "falco_dlq_depth"):
+            with self.subTest(alarm=alarm):
+                self.assertIn(f'aws_cloudwatch_metric_alarm" "{alarm}"', kubernetes)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -189,6 +189,7 @@ class TestReportBuilder(unittest.TestCase):
         self.assertEqual(report["mitre_techniques_by_framework"], {
             "ics": ["T0831"],
             "enterprise": ["T1078.004"],
+            "containers": [],
         })
         self.assertEqual(report["mitre_techniques"], ["T0831", "T1078.004"])
         self.assertEqual(report["mitre_tactics"], ["TA0001"])
@@ -211,6 +212,59 @@ class TestReportBuilder(unittest.TestCase):
 
         self.assertTrue(any("Triage the GuardDuty finding" in action for action in report["recommended_actions"]))
         self.assertEqual(report["detection_domains"], ["identity"])
+
+    def test_kubernetes_containers_framework_and_counts(self):
+        detections = [
+            {
+                "incident_correlator": "K8S_POD_EXEC#172.18.0.1",
+                "timestamp": "2026-10-25T10:00:01Z#aaaa",
+                "event_timestamp": "2026-10-25T10:00:01Z",
+                "severity": "HIGH",
+                "host": "web-0",
+                "src_ip": "172.18.0.1",
+                "alert_reason": "K8S_POD_EXEC",
+                "detection_domain": "kubernetes",
+                "mitre_technique": "T1609",
+                "mitre_framework": "containers",
+                "mitre_tactic": "TA0002",
+            },
+            {
+                "incident_correlator": "UNAUTHORIZED_MODBUS_WRITE#172.24.0.10",
+                "timestamp": "2026-10-25T10:02:00Z#bbbb",
+                "event_timestamp": "2026-10-25T10:02:00Z",
+                "severity": "MEDIUM",
+                "host": "ot-gateway",
+                "src_ip": "172.24.0.10",
+                "alert_reason": "UNAUTHORIZED_MODBUS_WRITE",
+                "detection_domain": "ot",
+            },
+        ]
+
+        report = build_report(detections)
+
+        self.assertEqual(report["mitre_techniques_by_framework"]["containers"], ["T1609"])
+        self.assertEqual(report["mitre_techniques_by_framework"]["ics"], ["T0831"])
+        self.assertEqual(report["detection_domains"], ["kubernetes", "ot"])
+        self.assertEqual(report["kubernetes_detection_count"], 1)
+        self.assertEqual(report["ot_detection_count"], 1)
+        self.assertTrue(any("exec" in action.lower() for action in report["recommended_actions"]))
+
+    def test_falco_findings_get_runtime_actions(self):
+        report = build_report([
+            {
+                "alert_reason": "FALCO_TERMINAL_SHELL_IN_CONTAINER",
+                "severity": "HIGH",
+                "host": "web-0",
+                "src_ip": "10.244.0.7",
+                "detection_domain": "kubernetes",
+                "mitre_technique": "T1609",
+                "mitre_framework": "containers",
+                "falco_rule": "Terminal shell in container",
+            }
+        ])
+
+        self.assertTrue(any("Triage the Falco event" in action for action in report["recommended_actions"]))
+        self.assertEqual(report["kubernetes_detection_count"], 1)
 
 if __name__ == "__main__":
     unittest.main()

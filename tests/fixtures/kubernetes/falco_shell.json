@@ -1,0 +1,18 @@
+{
+  "time": "2026-10-25T10:08:00Z",
+  "rule": "Terminal shell in container",
+  "priority": "Notice",
+  "source": "syscall",
+  "hostname": "kind-control-plane",
+  "output": "A shell was spawned in a container with an attached terminal (user=root container=web pod=web-0)",
+  "output_fields": {
+    "k8s.ns.name": "default",
+    "k8s.pod.name": "web-0",
+    "container.name": "web",
+    "proc.name": "bash",
+    "proc.cmdline": "bash -i",
+    "fd.name": "/bin/bash",
+    "user.name": "root",
+    "fd.sip": "10.244.0.7"
+  }
+}

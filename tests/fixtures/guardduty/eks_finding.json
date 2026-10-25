@@ -1,0 +1,36 @@
+{
+  "version": "0",
+  "id": "eks-finding-0001",
+  "detail-type": "GuardDuty Finding",
+  "source": "aws.guardduty",
+  "account": "000000000000",
+  "time": "2026-10-25T10:09:00Z",
+  "region": "us-east-1",
+  "detail": {
+    "schemaVersion": "2.0",
+    "id": "gd-eks-finding-0001",
+    "type": "Execution:Kubernetes/ExecInKubelet",
+    "severity": 8.0,
+    "createdAt": "2026-10-25T10:08:00Z",
+    "updatedAt": "2026-10-25T10:09:00Z",
+    "description": "An exec command was executed in a kubelet-managed container.",
+    "resource": {
+      "resourceType": "KubernetesCluster",
+      "kubernetesDetails": {
+        "kubernetesWorkloadDetails": {
+          "namespace": "default",
+          "name": "web-0"
+        }
+      }
+    },
+    "service": {
+      "action": {
+        "kubernetesApiCallAction": {
+          "remoteIpDetails": {
+            "ipAddressV4": "203.0.113.50"
+          }
+        }
+      }
+    }
+  }
+}
