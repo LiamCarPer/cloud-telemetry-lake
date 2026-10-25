@@ -136,7 +136,7 @@ make vuln-demo     # upload inventory + Nessus/Qualys fixtures
 make vuln-report   # JSON/CSV/Markdown in /tmp/opencode/vuln-report
 ```
 
-The committed fixtures produce 9 findings, 6 deduplicated remediation items, 4 critical items, and 2 KEV findings (Log4Shell and CVE-2024-3400). The live run also verified `first_seen` preservation and `last_seen` advancement across two scan dates.
+The committed fixtures produce 9 findings, 6 deduplicated remediation items, 4 critical items, and 4 KEV-flagged findings across two CVEs (Log4Shell and CVE-2024-3400). The live run also verified `first_seen` preservation and `last_seen` advancement across two scan dates.
 
 ---
 
