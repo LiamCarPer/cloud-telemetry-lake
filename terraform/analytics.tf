@@ -185,6 +185,102 @@ resource "aws_glue_catalog_table" "staged_telemetry" {
       name = "details"
       type = "string"
     }
+    columns {
+      name = "audit_id"
+      type = "string"
+    }
+    columns {
+      name = "request_received_timestamp"
+      type = "string"
+    }
+    columns {
+      name = "stage"
+      type = "string"
+    }
+    columns {
+      name = "verb"
+      type = "string"
+    }
+    columns {
+      name = "username"
+      type = "string"
+    }
+    columns {
+      name = "user_groups"
+      type = "string"
+    }
+    columns {
+      name = "namespace"
+      type = "string"
+    }
+    columns {
+      name = "resource"
+      type = "string"
+    }
+    columns {
+      name = "subresource"
+      type = "string"
+    }
+    columns {
+      name = "object_name"
+      type = "string"
+    }
+    columns {
+      name = "api_group"
+      type = "string"
+    }
+    columns {
+      name = "request_uri"
+      type = "string"
+    }
+    columns {
+      name = "request_object"
+      type = "string"
+    }
+    columns {
+      name = "container_image"
+      type = "string"
+    }
+    columns {
+      name = "workload"
+      type = "string"
+    }
+    columns {
+      name = "pod"
+      type = "string"
+    }
+    columns {
+      name = "container"
+      type = "string"
+    }
+    columns {
+      name = "process"
+      type = "string"
+    }
+    columns {
+      name = "command"
+      type = "string"
+    }
+    columns {
+      name = "file"
+      type = "string"
+    }
+    columns {
+      name = "user"
+      type = "string"
+    }
+    columns {
+      name = "falco_rule"
+      type = "string"
+    }
+    columns {
+      name = "falco_priority"
+      type = "string"
+    }
+    columns {
+      name = "severity"
+      type = "string"
+    }
   }
 
   partition_keys {
@@ -430,5 +526,120 @@ WHERE c.source = 'cloudtrail'
   AND o.source IN ('ot_sensor', 'iptables')
 GROUP BY c.date, c.user_name, c.source_ip, o.alert_reason
 ORDER BY events DESC;
+EOF
+}
+
+resource "aws_athena_named_query" "k8s_exec_events" {
+  count     = var.enable_analytics ? 1 : 0
+  name      = "k8s_exec_events"
+  workgroup = aws_athena_workgroup.ot_analytics[0].id
+  database  = aws_glue_catalog_database.ot_telemetry[0].name
+  query     = <<EOF
+SELECT
+  date,
+  username,
+  namespace,
+  object_name,
+  verb,
+  subresource,
+  response_code,
+  source_ip
+FROM staged_telemetry
+WHERE source = 'k8s_audit'
+  AND resource = 'pods'
+  AND subresource IN ('exec', 'attach')
+ORDER BY timestamp DESC;
+EOF
+}
+
+resource "aws_athena_named_query" "k8s_privileged_workloads" {
+  count     = var.enable_analytics ? 1 : 0
+  name      = "k8s_privileged_workloads"
+  workgroup = aws_athena_workgroup.ot_analytics[0].id
+  database  = aws_glue_catalog_database.ot_telemetry[0].name
+  query     = <<EOF
+SELECT
+  date,
+  username,
+  namespace,
+  object_name,
+  resource,
+  container_image,
+  request_object
+FROM staged_telemetry
+WHERE source = 'k8s_audit'
+  AND (
+    request_object LIKE '%"privileged": true%'
+    OR request_object LIKE '%hostPath%'
+  )
+ORDER BY date DESC;
+EOF
+}
+
+resource "aws_athena_named_query" "k8s_rbac_changes" {
+  count     = var.enable_analytics ? 1 : 0
+  name      = "k8s_rbac_changes"
+  workgroup = aws_athena_workgroup.ot_analytics[0].id
+  database  = aws_glue_catalog_database.ot_telemetry[0].name
+  query     = <<EOF
+SELECT
+  date,
+  verb,
+  username,
+  resource,
+  namespace,
+  object_name,
+  source_ip,
+  response_code
+FROM staged_telemetry
+WHERE source = 'k8s_audit'
+  AND resource IN ('roles', 'clusterroles', 'rolebindings', 'clusterrolebindings')
+ORDER BY timestamp DESC;
+EOF
+}
+
+resource "aws_athena_named_query" "k8s_anonymous_access" {
+  count     = var.enable_analytics ? 1 : 0
+  name      = "k8s_anonymous_access"
+  workgroup = aws_athena_workgroup.ot_analytics[0].id
+  database  = aws_glue_catalog_database.ot_telemetry[0].name
+  query     = <<EOF
+SELECT
+  date,
+  verb,
+  resource,
+  namespace,
+  object_name,
+  source_ip,
+  response_code
+FROM staged_telemetry
+WHERE source = 'k8s_audit'
+  AND (
+    username = 'system:anonymous'
+    OR user_groups LIKE '%system:unauthenticated%'
+  )
+ORDER BY timestamp DESC;
+EOF
+}
+
+resource "aws_athena_named_query" "falco_high_severity" {
+  count     = var.enable_analytics ? 1 : 0
+  name      = "falco_high_severity"
+  workgroup = aws_athena_workgroup.ot_analytics[0].id
+  database  = aws_glue_catalog_database.ot_telemetry[0].name
+  query     = <<EOF
+SELECT
+  date,
+  falco_rule,
+  falco_priority,
+  namespace,
+  pod,
+  process,
+  command,
+  source_ip
+FROM staged_telemetry
+WHERE source = 'falco'
+  AND severity IN ('HIGH', 'MEDIUM')
+ORDER BY timestamp DESC;
 EOF
 }

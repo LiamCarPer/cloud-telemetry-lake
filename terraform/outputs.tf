@@ -112,3 +112,23 @@ output "guardduty_detector_id" {
   value       = var.enable_guardduty ? aws_guardduty_detector.identity[0].id : null
   description = "GuardDuty detector ID (null when enable_guardduty is false)."
 }
+
+output "kubernetes_bucket_name" {
+  value       = aws_s3_bucket.telemetry_buckets["kubernetes"].bucket
+  description = "S3 bucket for Kubernetes audit logs."
+}
+
+output "k8s_queue_url" {
+  value       = aws_sqs_queue.k8s_ingest.id
+  description = "SQS queue carrying Kubernetes audit objects to the detector."
+}
+
+output "falco_queue_url" {
+  value       = aws_sqs_queue.falco_events.id
+  description = "SQS queue for Falco/Falcosidekick runtime events."
+}
+
+output "kubernetes_lambda_arn" {
+  value       = aws_lambda_function.kubernetes.arn
+  description = "ARN of the Kubernetes audit/Falco detection Lambda."
+}

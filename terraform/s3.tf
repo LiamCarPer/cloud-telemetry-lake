@@ -3,11 +3,12 @@ data "aws_caller_identity" "current" {}
 locals {
   account_id = data.aws_caller_identity.current.account_id
   bucket_names = {
-    raw      = "ot-telemetry-raw-${local.account_id}"
-    staged   = "ot-telemetry-staged-${local.account_id}"
-    reports  = "ot-telemetry-reports-${local.account_id}"
-    dlq      = "ot-telemetry-dlq-${local.account_id}"
-    identity = "ot-identity-raw-${local.account_id}"
+    raw        = "ot-telemetry-raw-${local.account_id}"
+    staged     = "ot-telemetry-staged-${local.account_id}"
+    reports    = "ot-telemetry-reports-${local.account_id}"
+    dlq        = "ot-telemetry-dlq-${local.account_id}"
+    identity   = "ot-identity-raw-${local.account_id}"
+    kubernetes = "ot-k8s-raw-${local.account_id}"
   }
 }
 
@@ -129,6 +130,24 @@ resource "aws_s3_bucket_lifecycle_configuration" "identity" {
 
     expiration {
       days = 365
+    }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "kubernetes" {
+  bucket = aws_s3_bucket.telemetry_buckets["kubernetes"].id
+
+  rule {
+    id     = "k8s-audit-retention"
+    status = "Enabled"
+    filter {}
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+
+    expiration {
+      days = 180
     }
   }
 }
