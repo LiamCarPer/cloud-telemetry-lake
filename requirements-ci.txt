@@ -1,5 +1,5 @@
 # Security tooling for CI and `make security`. Kept separate from
 # requirements-dev.txt so scanner dependencies never affect the test runtime.
 bandit==1.9.4
-checkov==3.3.29
+checkov==3.3.30
 pip-audit==2.10.1
